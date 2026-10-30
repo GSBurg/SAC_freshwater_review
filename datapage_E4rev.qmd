@@ -1,0 +1,641 @@
+---
+# ---------------------------------------------------------------------------
+# CUSTOMIZE: everything marked CUSTOMIZE in this header and in the setup chunk
+# ---------------------------------------------------------------------------
+title: "Lost in space? Piecing together spatial autocorrelation in freshwater ecosystems"
+author:
+  - name: "xxx"
+    # orcid: 0000-0000-0000-0000        # CUSTOMIZE: add your ORCID
+    # affiliation: Your institution     # CUSTOMIZE
+date: 2026-10-30                        # CUSTOMIZE: date the data were last updated
+date-format: "D MMMM YYYY"
+doi: 10.5281/zenodo.0000000             # CUSTOMIZE: your real DOI
+license: "CC BY"                        # CUSTOMIZE: data license (adds a "Reuse" note)
+citation:                               # CUSTOMIZE: adds a citation + BibTeX block at the end
+  type: dataset
+  title: "Spatial autocorrelation in freshwater ecology: a systematic review database"
+  version: "0.1 (pilot)"
+  publisher: Zenodo
+  doi: 10.5281/zenodo.0000000
+  url: https://kylemorrison99.github.io/spatial_autocorrelation/datapage.html
+google-scholar: true
+language:
+  title-block-published: "Last updated"
+format:
+  html:
+    theme:
+      light: cosmo
+      dark: darkly
+    respect-user-color-scheme: true     # follow the system light/dark setting
+    toc: true
+    toc-location: left
+    toc-title: "On this page"
+    page-layout: full
+    embed-resources: true               # one self-contained HTML file
+    smooth-scroll: true
+    anchor-sections: true
+execute:
+  echo: false
+  message: false
+  warning: false
+---
+
+```{r setup}
+#| include: false
+
+# Packages. To install any that are missing:
+# install.packages(c("here", "readr", "dplyr", "tidyr", "DT", "crosstalk", "htmltools"))
+suppressPackageStartupMessages({
+  library(here)
+  library(readr)
+  library(dplyr)
+  library(tidyr)
+  library(DT)
+  library(crosstalk)
+  library(htmltools)
+})
+
+# ---- CUSTOMIZE: data file and settings ------------------------------------
+data_file     <- here("data", "Metadata_E4.csv")
+data_file_url <- "data/Metadata_E4.csv"  # link for the "Full CSV" button, relative to the rendered HTML
+search_end    <- "August 2026"
+
+# Columns shown in the table by default; the rest are one click away under "Columns".
+default_columns <- c(
+  "Study_ID", "Publication_year", "Authors", "Title", "Country", "Habitat",
+  "Target_group", "Scale_class", "SAC_detected", "SAC_method", "DOI"
+)
+
+# Columns with several comma-separated values per cell. They get a text
+# filter ("contains") instead of a drop-down.
+multi_value_columns <- c("SAC_objective", "Spatial_metric", "SAC_method",
+                         "Process_inferred", "Factor_affecting_SAC")
+
+# Long text, truncated in the table (full text in the row details and downloads)
+long_text_columns <- c("Title", "Notes", "Toponym")
+
+# ---- Read the data --------------------------------------------------------
+# "NA" in the sheet means "the coder looked and there was nothing to record";
+# it is treated as missing, like an empty cell. Empty spreadsheet rows are dropped.
+sac_raw <- read_csv(data_file, col_types = cols(.default = col_character()),
+                    na = c("", "NA"), locale = locale(encoding = "UTF-8")) |>
+  filter(!is.na(Study_ID))
+
+number_columns <- c("Publication_year", "Number_of_sites", "Number_of_data",
+                    "Number_of_water_bodies", "SAC_range_value_m")
+
+sac <- sac_raw |>
+  mutate(across(any_of(number_columns), as.numeric))
+
+# ---- Data dictionary -------------------------------------------------------
+# CUSTOMIZE: check these against your coding protocol.
+dictionary <- tribble(
+  ~column, ~description,
+  "Study_ID", "Identifier of the source publication. A study can contribute several analyses, so the same Study ID can appear on several rows.",
+  "Analysis_ID", "Identifier of the analysis (one row). Equal to the Study ID when a study contributes one analysis; otherwise the Study ID plus a suffix (for example _a, _b or _lake).",
+  "DOI", "Digital Object Identifier of the publication, shown as a link.",
+  "Title", "Title of the publication.",
+  "Publication_year", "Year of publication.",
+  "Journal", "Journal in which the study was published.",
+  "Authors", "First author, followed by \"et al.\" when there are more than two authors.",
+  "Continent", "Continent of the study area. \"Multiple\" means the study spans several continents.",
+  "Country", "Country of the study area. \"Multiple\" means several countries or a global dataset.",
+  "Toponym", "Place name(s) of the study area, as reported by the authors.",
+  "Climatic_region", "Broad climatic region of the study area, from polar to tropical. \"Multiple\" means the study covers several regions.",
+  "Freshwater_realm", "Lotic (running water), lentic (standing water), groundwater, or multiple realms.",
+  "Habitat", "Habitat type sampled. \"Multiple\" means several habitat types; \"Reservoire\" is reservoir.",
+  "Human_stressors", "Main human stressor considered by the study, if any (for example damming, nutrient enrichment, invasive species).",
+  "Target_group", "Organism group analysed.",
+  "Target_level", "Level of biological organisation analysed: community or population.",
+  "Taxonomic_res", "Taxonomic resolution of the biological data (species, genus, family, order or higher, molecular OTUs or ASVs, mixed \"taxa\", or multiple).",
+  "ID_method", "How organisms were identified: morphological, molecular, remote sensing, or multiple methods.",
+  "Network_position", "Position of the sampled reaches in the river network (for example headwaters, entire river segment, large river). Usually missing for standing waters.",
+  "Land_use", "Dominant land use around the study sites: natural, agricultural, urban or mixed.",
+  "Response_category", "Biological response analysed. Beta-div = beta diversity; P/A = presence/absence.",
+  "Response_data_type", "Statistical type of the response variable: dissimilarity, continuous, count, binary or proportion.",
+  "Study_extent", "Spatial extent of the study as reported, usually the maximum distance between sites in km (some entries are areas in km² or a description).",
+  "Scale_class", "Spatial scale class of the study: local, landscape, regional or continental.",
+  "Number_of_sites", "Number of sampling sites.",
+  "Number_of_data", "Number of observations (samples or data points) in the analysis.",
+  "Number_of_water_bodies", "Number of distinct water bodies sampled.",
+  "Temporal_design", "Sampling through time: a single sampling, repeated seasonally, repeated annually, or long-term. \"Repeted\" is \"repeated\".",
+  "SAC_role", "How the study treated spatial autocorrelation: as an ecological signal of interest, as a statistical challenge to be accounted for, or both.",
+  "SAC_objective", "Purpose(s) of the SAC analysis: detect or describe spatial structure, infer ecological processes, account for non-independence, prediction, or other.",
+  "SAC_detected", "Whether spatial autocorrelation was detected (yes or no).",
+  "SAC_direction", "Direction of the autocorrelation found: positive, negative, both, or NS (not significant).",
+  "Spatial_metric", "Distance or connectivity measure(s) used to relate sites: geographic, Euclidean, network (along the watercourse), resistance/cost, adjacency/neighbourhood, elevation, other or unclear.",
+  "Directionality_considered", "Whether directional (for example upstream-downstream) spatial dependence was considered. \"Not applicable\" where flow direction does not apply.",
+  "SAC_method", "Method(s) used to detect, measure or model SAC (for example distance-decay models, Mantel-type tests, spatial eigenvectors, Moran's I, correlograms, variograms).",
+  "Residual_SAC_tested", "Whether model residuals were tested for remaining spatial autocorrelation.",
+  "SAC_range_value_m", "Reported range of spatial autocorrelation (the distance up to which observations are correlated), in metres.",
+  "Process_inferred", "Ecological process(es) the authors inferred from the spatial pattern (for example species sorting, dispersal limitation, mass effects, neutral processes).",
+  "Factor_affecting_SAC", "Factor(s) reported to affect the strength or range of SAC (for example environmental heterogeneity, spatial scale, dispersal ability).",
+  "Sampling_recommendation_provided", "Whether the study gives recommendations for sampling design (for example site spacing): yes, no or unclear.",
+  "Notes", "Free-text notes from the coder."
+)
+
+# ---- Helpers ---------------------------------------------------------------
+fmt <- function(x) format(x, big.mark = ",", scientific = FALSE, trim = TRUE)
+
+stat_card <- function(value, label) {
+  div(class = "stat-card",
+      span(class = "stat-value", value),
+      span(class = "stat-label", label))
+}
+
+doi_link <- function(x) {
+  doi <- sub("^.*?(10\\.\\d{4,9}/\\S+)$", "\\1", x, perl = TRUE)
+  url <- paste0("https://doi.org/", doi)
+  ifelse(is.na(x), NA_character_,
+         sprintf('<a href="%s" target="_blank" rel="noopener">%s</a>',
+                 htmlEscape(url, attribute = TRUE), htmlEscape(doi)))
+}
+
+# DataTables styling that matches the Bootstrap 5 page (older DT versions only have bootstrap4)
+dt_style <- if ("bootstrap5" %in% tryCatch(DT:::DTStyles(), error = function(e) character())) "bootstrap5" else "bootstrap4"
+
+# Summary numbers for the header cards
+n_analyses  <- nrow(sac)
+n_studies   <- n_distinct(sac$Study_ID)
+n_countries <- n_distinct(sac$Country[!is.na(sac$Country) & sac$Country != "Multiple"])
+year_range  <- paste(range(sac$Publication_year, na.rm = TRUE), collapse = "–")
+n_range     <- sum(!is.na(sac$SAC_range_value_m))
+```
+
+```{=html}
+<style>
+/* Colours come from Bootstrap variables, so light and dark mode both work. */
+h2 { border-bottom: 1px solid var(--bs-border-color); padding-bottom: .35rem; margin-top: 2.5rem; }
+
+/* Translucent tints, not --bs-tertiary-bg: darkly leaves that variable light, which hid the text in dark mode. */
+.stat-card-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: .75rem; margin: .5rem 0 1.5rem; align-items: start; }
+.stat-card { background: rgba(128,128,128,.10); border: 1px solid rgba(128,128,128,.30); border-radius: .6rem; padding: .8rem 1rem; color: inherit; }
+.stat-value { display: block; font-size: clamp(1.3rem, 1rem + 1.2vw, 1.6rem); font-weight: 700; line-height: 1.15; white-space: nowrap; color: inherit; }
+.stat-label { display: block; margin-top: .2rem; font-size: .8rem; line-height: 1.3; opacity: .75; text-transform: uppercase; letter-spacing: .03em; }
+
+.filter-panel { background: var(--bs-body-bg); border: 1px solid var(--bs-border-color); border-radius: .7rem; padding: 1rem 1.15rem .4rem; margin-bottom: 1rem; box-shadow: 0 1px 4px rgba(0,0,0,.05); }
+.filter-panel-title { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap; font-weight: 700; margin-bottom: .75rem; }
+/* contrast: cosmo's primary blue and the slider labels fall below 4.5:1 with white text */
+body.quarto-light .btn-primary { --bs-btn-bg: #1a65c0; --bs-btn-border-color: #1a65c0; --bs-btn-hover-bg: #14519b; --bs-btn-hover-border-color: #14519b; --bs-btn-active-bg: #14519b; --bs-btn-active-border-color: #14519b; }
+.irs--shiny .irs-from, .irs--shiny .irs-to, .irs--shiny .irs-single { background-color: #1d5a96 !important; }
+.irs--shiny .irs-bar { background: #1d5a96 !important; border-color: #1d5a96 !important; }
+.irs-hidden-input { visibility: hidden; }
+.dt-buttons .btn.dl-btn { background-color: #1a65c0; border-color: #1a65c0; color: #fff; }
+.dt-buttons .btn.dl-btn:hover, .dt-buttons .btn.dl-btn:focus-visible { background-color: #14519b; border-color: #14519b; color: #fff; }
+body.quarto-dark .dt-buttons .btn.dl-btn { background-color: #375a7f; border-color: #375a7f; }
+body.quarto-dark .dt-buttons .btn.dl-btn:hover { background-color: #2b4764; border-color: #2b4764; }
+body.quarto-light #quarto-appendix a, body.quarto-light .appendix a { color: #1a5bc4; }
+body.quarto-dark .pagination .page-link { background-color: #1b7a5f; border-color: #1b7a5f; color: #fff; }
+body.quarto-dark .pagination .page-item.active .page-link { background-color: #0f4d3b; border-color: #fff; font-weight: 700; }
+body.quarto-dark .pagination .page-item.disabled .page-link { background-color: #2b2b2b; border-color: #444; color: #aaa; }
+
+/* typed year range, kept in sync with the slider (the slider itself has no keyboard support) */
+.year-inputs { display: flex; gap: .75rem; margin-top: .4rem; }
+.year-inputs label { display: flex; align-items: center; gap: .35rem; font-size: .875rem; font-weight: 400; }
+.year-inputs input { width: 6.5rem; }
+
+/* buttons and inputs that read well on both the light and dark theme */
+.btn-quiet { color: inherit; border: 1px solid rgba(128,128,128,.55); background: transparent; }
+.btn-quiet:hover, .btn-quiet:focus-visible, .btn-quiet[aria-expanded="true"] { color: inherit; background: rgba(128,128,128,.18); border-color: rgba(128,128,128,.85); }
+
+body.quarto-dark .selectize-input,
+body.quarto-dark .selectize-input.full,
+body.quarto-dark .selectize-input.focus,
+body.quarto-dark .form-control,
+body.quarto-dark .form-select,
+body.quarto-dark table.dataTable thead input,
+body.quarto-dark div.dataTables_wrapper div.dataTables_filter input,
+body.quarto-dark div.dataTables_wrapper div.dataTables_length select {
+  background: rgba(255,255,255,.06) !important; color: #fff !important; border-color: rgba(255,255,255,.28) !important; box-shadow: none;
+}
+body.quarto-dark .selectize-input input { background: transparent !important; color: #fff !important; }
+body.quarto-dark .selectize-input input::placeholder,
+body.quarto-dark .form-control::placeholder,
+body.quarto-dark table.dataTable thead input::placeholder { color: rgba(255,255,255,.6) !important; }
+body.quarto-dark .selectize-dropdown { background: #2b2b2b; color: #fff; border-color: rgba(255,255,255,.28); }
+body.quarto-dark .selectize-dropdown .active { background: #375a7f; color: #fff; }
+body.quarto-dark .selectize-input .item { background: #375a7f !important; color: #fff !important; border-color: #375a7f !important; }
+.filter-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: .25rem 1.25rem; }
+.filter-grid .control-label { font-weight: 600; font-size: .875rem; }
+.filter-grid .irs { margin-top: -.25rem; }
+
+.result-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: .5rem 1rem; margin: .25rem 0 .75rem; }
+.result-count { font-size: .95rem; color: var(--bs-secondary-color); }
+.result-count strong { color: var(--bs-body-color); }
+
+table.dataTable { font-size: .875rem; }
+table.dataTable thead th { white-space: nowrap; }
+table.dataTable td { vertical-align: top; }
+table.dataTable td.dt-details-col { width: 1%; white-space: nowrap; }
+.dt-buttons .btn { margin-bottom: .35rem; }
+div.dataTables_wrapper div.dataTables_filter input { min-width: 16rem; }
+span.ellipsis { cursor: help; }
+table.dataTable td.dt-long { min-width: 22rem; }
+table.dataTable td.dt-wide { min-width: 13rem; }
+table.dataTable td.text-nowrap a { white-space: nowrap; }
+
+/* crosstalk drop-downs: show an arrow so they read as selects */
+.crosstalk-input-select .selectize-control .selectize-input { position: relative; padding-right: 2rem; cursor: pointer; }
+.crosstalk-input-select .selectize-control .selectize-input::after {
+  content: "▾"; position: absolute; right: .75rem; top: 50%; transform: translateY(-50%);
+  pointer-events: none; color: var(--bs-secondary-color); font-size: .85em; border: 0; margin: 0; width: auto; height: auto;
+}
+
+.row-details { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: .55rem 1.5rem; margin: .25rem 0; font-size: .875rem; }
+.row-details dt { font-size: .75rem; font-weight: 600; color: var(--bs-secondary-color); }
+.row-details dd { margin: 0; overflow-wrap: anywhere; }
+.row-details .wide { grid-column: 1 / -1; }
+td.row-details-cell { background: rgba(128,128,128,.10) !important; }
+
+
+.download-row { display: flex; flex-wrap: wrap; gap: .6rem; margin: .5rem 0 1rem; }
+.table-note { font-size: .875rem; color: var(--bs-secondary-color); margin-top: .5rem; }
+.dict-values { font-size: .8125rem; }
+</style>
+```
+
+```{r stat-cards}
+div(class = "stat-card-row",
+    stat_card(fmt(n_analyses), "analyses"),
+    stat_card(fmt(n_studies), "studies"),
+    stat_card(n_countries, "countries"),
+    stat_card(year_range, "publication years"),
+    stat_card(fmt(n_range), "report an SAC range"))
+```
+
+## About the database
+
+This page accompanies a systematic review of how spatial autocorrelation (SAC) is detected, measured,
+modelled and accounted for in freshwater ecology. Each row of the database is one **analysis**; a
+study can contribute several. Every analysis is coded for geography, habitat, organism group,
+sampling design, the SAC method used, and what the authors concluded. The literature search runs to
+`r search_end`.
+
+::: callout-tip
+## How to use this page
+
+- **Filter** with the drop-downs and the publication-year range (drag the slider or type the years)
+  in the panel above the table. Filters combine
+  (AND); choosing several values in one drop-down matches any of them.
+- **Search** every column at once with the search box, or a single column with the boxes under the
+  column headers.
+- **Sort** by clicking a column header. Shift-click a second header to sort by both.
+- **Details** on any row shows all `r ncol(sac)` fields for that analysis.
+- **Download** the rows that match your filters with **Filtered CSV** or **Filtered Excel** (every
+  matching row and every column, not just the current page), or get everything with **Full dataset**.
+- **Columns** shows or hides columns. Everything works with the keyboard: Tab between controls,
+  Enter or Space to open a drop-down or sort a column.
+:::
+
+## Explore the data
+```{r shared-data}
+display_columns <- c(default_columns, setdiff(names(sac), default_columns))
+
+# Repair invalid UTF-8 characters before creating the interactive table
+repair_utf8 <- function(x) {
+  if (is.character(x)) {
+    iconv(x, from = "UTF-8", to = "UTF-8", sub = "byte")
+  } else if (is.factor(x)) {
+    factor(iconv(as.character(x), from = "UTF-8", to = "UTF-8", sub = "byte"))
+  } else {
+    x
+  }
+}
+
+sac <- sac |>
+  mutate(across(where(is.character) | where(is.factor), repair_utf8))
+
+table_data <- sac |>
+  mutate(
+    DOI = doi_link(DOI),
+    across(where(is.character) & !any_of(c("DOI", multi_value_columns, long_text_columns,
+                                           "Study_ID", "Analysis_ID", "Authors", "Journal",
+                                           "Toponym", "Study_extent")),
+           as.factor)
+  ) |>
+  select(all_of(display_columns)) |>
+  mutate(.row_key = paste0(Analysis_ID, "__", row_number()), .before = 1)
+
+sd <- SharedData$new(table_data, key = ~.row_key, group = "sac")
+```
+
+::: {.filter-panel}
+::: {.filter-panel-title}
+<span>Filter the database</span>
+<button type="button" class="btn btn-sm btn-quiet" id="reset-all">Reset all filters ↺</button>
+:::
+
+```{r filters}
+div(class = "filter-grid",
+  filter_select("f_continent", "Continent", sd, ~Continent, multiple = TRUE),
+  filter_select("f_country", "Country", sd, ~Country, multiple = TRUE),
+  filter_select("f_realm", "Freshwater realm", sd, ~Freshwater_realm, multiple = TRUE),
+  filter_select("f_habitat", "Habitat", sd, ~Habitat, multiple = TRUE),
+  filter_select("f_group", "Target group", sd, ~Target_group, multiple = TRUE),
+  filter_select("f_scale", "Spatial scale", sd, ~Scale_class, multiple = TRUE),
+  filter_select("f_role", "SAC role", sd, ~SAC_role, multiple = TRUE),
+  filter_select("f_detected", "SAC detected", sd, ~SAC_detected, multiple = TRUE),
+  filter_slider("f_year", "Publication year", sd, ~Publication_year,
+                step = 1, sep = "", ticks = FALSE, round = TRUE, width = "100%")
+)
+```
+:::
+
+::: {.result-bar}
+<div class="result-count" id="result-count" role="status" aria-live="polite">Loading…</div>
+<div class="download-row">
+<a class="btn btn-primary btn-sm" href="`r data_file_url`" download>⬇ Full dataset (CSV, all `r fmt(n_analyses)` rows)</a>
+</div>
+:::
+
+
+
+```{r table}
+col_index <- function(cols) which(names(table_data) %in% cols) - 1   # 0-based, includes .row_key
+hidden    <- col_index(setdiff(display_columns, default_columns))
+long_idx  <- col_index(long_text_columns)
+wide_idx  <- col_index(c(multi_value_columns, "Toponym", "Journal"))
+num_idx   <- col_index(number_columns)
+
+# column 0 (the internal row key) is displayed as a "Details" button,
+# named after the analysis so screen readers can tell the buttons apart
+analysis_idx <- col_index("Analysis_ID")
+details_render <- JS(sprintf(
+  "function(d, type, row) { if (type !== 'display') return ''; var id = $('<div>').html(row[%d]).text().replace(/[^\\w.-]/g, '');
+   return '<button type=\"button\" class=\"btn btn-sm btn-quiet dt-details\" aria-expanded=\"false\" aria-label=\"Details for ' + id + '\">Details</button>'; }",
+  analysis_idx))
+
+export_opts <- list(
+  columns = ":not(.no-export)",          # every data column, including hidden ones
+  modifier = list(search = "applied"),   # only rows matching the filters
+  orthogonal = "export"                  # full text, not the truncated display
+)
+
+datatable(
+  sd,
+  filter = "top",
+  rownames = FALSE,
+  escape = setdiff(names(table_data), "DOI"),
+  style = dt_style,
+  class = "table table-sm table-hover",
+  extensions = c("Buttons"),
+  plugins = "ellipsis",
+  selection = "none",
+  options = list(
+    dom = "<'d-flex flex-wrap justify-content-between align-items-start gap-2'Bf>rt<'d-flex flex-wrap justify-content-between align-items-center gap-2 mt-2'lip>",
+    pageLength = 25,
+    lengthMenu = list(c(10, 25, 50, 100, -1), c("10", "25", "50", "100", "All")),
+    autoWidth = FALSE,
+    scrollX = TRUE,
+    searchDelay = 250,
+    order = list(),
+    language = list(search = "Search all columns:", searchPlaceholder = "e.g. diatoms Mantel"),
+    columnDefs = list(
+      list(targets = 0, visible = TRUE, searchable = FALSE, orderable = FALSE,
+           className = "no-export dt-details-col", title = "",
+           render = details_render),
+      list(targets = hidden, visible = FALSE),
+      list(targets = long_idx, className = "dt-long",
+           render = JS("$.fn.dataTable.render.ellipsis(90, true, false)")),
+      list(targets = wide_idx, className = "dt-wide"),
+      list(targets = num_idx, className = "dt-right"),
+      list(targets = col_index(c("DOI", "Study_ID", "Analysis_ID", "Authors")), className = "text-nowrap")
+    ),
+    buttons = list(
+      list(extend = "csv", text = "⬇ Filtered CSV", className = "btn-sm dl-btn",
+           titleAttr = "Download the rows matching the current filters as CSV (all columns)",
+           filename = "spatial_autocorrelation_filtered", exportOptions = export_opts),
+      list(extend = "excel", text = "⬇ Filtered Excel", className = "btn-sm dl-btn",
+           titleAttr = "Download the rows matching the current filters as an Excel file (all columns)",
+           filename = "spatial_autocorrelation_filtered", title = "", exportOptions = export_opts),
+      list(extend = "copy", text = "Copy", className = "btn-sm",
+           titleAttr = "Copy the rows matching the current filters to the clipboard", title = "", exportOptions = export_opts),
+      list(extend = "colvis", text = "Columns ▾", className = "btn-sm",
+           columns = ":not(.no-export)", collectionLayout = "two-column"),
+      list(extend = "colvisGroup", text = "Default columns", className = "btn-sm",
+           show = col_index(default_columns), hide = hidden)
+    )
+  ),
+  callback = JS("
+    // ---- row details: every field of the analysis ----
+    table.on('click', 'button.dt-details', function () {
+      var btn = $(this), tr = btn.closest('tr'), row = table.row(tr);
+      if (row.child.isShown()) {
+        row.child.hide();
+        btn.attr('aria-expanded', 'false').text('Details');
+        return;
+      }
+      var d = row.data(), html = '<dl class=\"row-details\">';
+      table.columns().every(function (i) {
+        if (i < 1) return;                                  // column 0 = button (internal row key)
+        var name = $(this.header()).text(), v = d[i];
+        if (v === null || v === undefined || v === '') v = '<span class=\"text-body-secondary\">—</span>';
+        var wide = typeof v === 'string' && v.length > 140 ? ' class=\"wide\"' : '';
+        html += '<div' + wide + '><dt>' + name + '</dt><dd>' + v + '</dd></div>';
+      });
+      row.child(html + '</dl>', 'row-details-cell').show();
+      btn.attr('aria-expanded', 'true').text('Hide');
+    });
+
+    // ---- live count of matching analyses and studies ----
+    var total = table.rows().count();
+    function updateCount() {
+      var rows = table.rows({ search: 'applied' }).data();
+      var studies = {};
+      rows.each(function (r) { studies[r[1]] = 1; });         // column 1 = Study_ID
+      var n = rows.length, s = Object.keys(studies).length;
+      var el = document.getElementById('result-count');
+      if (el) el.innerHTML = 'Showing <strong>' + n.toLocaleString() + '</strong> of ' + total.toLocaleString() +
+        ' analyses (<strong>' + s.toLocaleString() + '</strong> ' + (s === 1 ? 'study' : 'studies') + ')';
+    }
+    table.on('draw', updateCount);
+    updateCount();
+
+    // ---- give each column filter box a name screen readers can announce ----
+    function labelColumnFilters() {
+      var cells = $(table.table().container()).find('thead tr').eq(1).children();
+      table.columns(':visible').every(function (n) {
+        var name = $(this.header()).text().trim();
+        var cell = cells.eq(n);
+        if (!name) return;
+        cell.find('input').attr('aria-label', 'Filter ' + name);
+        cell.find('select').attr('aria-label', 'Filter ' + name);
+      });
+    }
+    setTimeout(labelColumnFilters, 0);
+    table.on('column-visibility.dt', function () { setTimeout(labelColumnFilters, 0); });
+
+    // ---- reset every filter: crosstalk panel, column filters and global search ----
+    $('#reset-all').on('click', function () {
+      $('.crosstalk-input-select select').each(function () { if (this.selectize) this.selectize.clear(); });
+      $('.crosstalk-input-slider input').each(function () {
+        var s = $(this).data('ionRangeSlider');
+        if (s) s.update({ from: s.options.min, to: s.options.max });   // fires the change crosstalk listens to
+      });
+      var head = $(table.table().container());
+      head.find('thead input[type=search], thead input[type=text]').val('').trigger('input');
+      head.find('thead select').each(function () { if (this.selectize) this.selectize.clear(); });
+      head.find('.noUi-target').each(function () { if (this.noUiSlider) this.noUiSlider.reset(); });
+      table.search('').columns().search('').draw();
+    });
+  ")
+)
+```
+
+<div class="table-note">Filtered downloads contain every row that matches the current filters and search, with all `r ncol(sac)` columns, including hidden ones. Values are exported in full, not truncated. Hover over a truncated title, or use <strong>Details</strong>, to see all of it.</div>
+
+## Data dictionary
+
+One entry per column of the CSV, in file order. Values and completeness are computed from the data
+file when this page is rendered, so they stay current when the data change. `NA` and empty cells
+count as missing.
+
+```{r dictionary}
+summarise_values <- function(col, x) {
+  present <- x[!is.na(x)]
+  if (!length(present)) return("No values")
+  if (col %in% number_columns) {
+    v <- as.numeric(present)
+    f <- if (col == "Publication_year") as.character else fmt
+    return(sprintf("Range %s to %s; median %s", f(min(v)), f(max(v)), f(median(v))))
+  }
+  if (col %in% multi_value_columns) present <- trimws(unlist(strsplit(present, ",")))
+  counts <- sort(table(present), decreasing = TRUE)
+  if (length(counts) > 25 || col %in% c(long_text_columns, "Study_ID", "Analysis_ID", "DOI",
+                                        "Authors", "Journal", "Study_extent")) {
+    return(sprintf("%s distinct values", fmt(length(counts))))
+  }
+  out <- paste0(names(counts), " (", counts, ")", collapse = " · ")
+  if (col %in% multi_value_columns) out <- paste0("Several per row. ", out)
+  out
+}
+
+column_type <- function(col, x) {
+  if (col %in% number_columns) "Number"
+  else if (col %in% multi_value_columns) "Multi-value"
+  else if (col %in% c("Study_ID", "Analysis_ID", "DOI")) "Identifier"
+  else if (n_distinct(x, na.rm = TRUE) <= 25) "Category"
+  else "Text"
+}
+
+dict_table <- tibble(Column = names(sac_raw)) |>
+  left_join(dictionary, by = c("Column" = "column")) |>
+  rowwise() |>
+  mutate(
+    Description = coalesce(description, "No description yet."),
+    Type = column_type(Column, sac_raw[[Column]]),
+    Values = summarise_values(Column, sac_raw[[Column]]),
+    Completeness = sprintf("%s of %s (%d%%)", fmt(sum(!is.na(sac_raw[[Column]]))), fmt(nrow(sac_raw)),
+                           round(100 * mean(!is.na(sac_raw[[Column]]))))
+  ) |>
+  ungroup() |>
+  select(Column, Description, Type, Values, Completeness)
+
+datatable(
+  dict_table,
+  rownames = FALSE,
+  style = dt_style,
+  class = "table table-sm",
+  selection = "none",
+  options = list(
+    dom = "ft",
+    paging = FALSE,
+    ordering = FALSE,
+    autoWidth = FALSE,
+    scrollX = TRUE,
+    language = list(search = "Search the dictionary:"),
+    columnDefs = list(
+      list(targets = 0, render = JS("function(d, type) { return type === 'display' ? '<code>' + d + '</code>' : d; }")),
+      list(targets = 3, className = "dict-values"),
+      list(targets = 4, className = "text-nowrap")
+    )
+  )
+)
+```
+
+## How to cite
+
+If you use these data, please cite the dataset:
+
+::: callout-note
+## Citation
+<!-- CUSTOMIZE: authors, year, title, version and DOI -->
+Morrison, K. (2026). *Spatial autocorrelation in freshwater ecology: a systematic review database*
+(Version 0.1, pilot) [Data set]. <https://doi.org/10.5281/zenodo.0000000>
+:::
+
+A BibTeX entry is at the bottom of this page.
+
+## License and reuse
+
+<!-- CUSTOMIZE: confirm the data license -->
+The data are released under the [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/)
+license: you may share and adapt them for any purpose, provided you cite the dataset. The code is
+released under the [MIT License](https://github.com/KyleMorrison99/spatial_autocorrelation/blob/main/LICENSE).
+
+Corrections and suggestions are welcome: please
+[open an issue](https://github.com/KyleMorrison99/spatial_autocorrelation/issues) on the GitHub repository,
+or fork it and send a pull request.
+
+```{=html}
+<script>
+// Accessibility helpers for the filter panel and the Quarto page furniture.
+(function () {
+  // "All" in empty filter drop-downs
+  function placeholders() {
+    document.querySelectorAll('.crosstalk-input-select select').forEach(function (el) {
+      if (el.selectize) { el.selectize.settings.placeholder = 'All'; el.selectize.updatePlaceholder(); }
+    });
+  }
+  // "From" and "To" year boxes for keyboard and screen-reader users, synced with the slider
+  function yearInputs() {
+    var box = document.getElementById('f_year');
+    var $in = window.jQuery && jQuery(box).find('input').first();
+    var sl = $in && $in.data('ionRangeSlider');
+    if (!box || !sl || box.querySelector('.year-inputs')) return;
+    var o = sl.options;
+    var wrap = document.createElement('div');
+    wrap.className = 'year-inputs';
+    wrap.innerHTML =
+      '<label>From <input type="number" class="form-control form-control-sm" id="year-from" min="' + o.min + '" max="' + o.max + '" step="1"></label>' +
+      '<label>To <input type="number" class="form-control form-control-sm" id="year-to" min="' + o.min + '" max="' + o.max + '" step="1"></label>';
+    box.appendChild(wrap);
+    var from = document.getElementById('year-from'), to = document.getElementById('year-to');
+    function show() { from.value = sl.result.from; to.value = sl.result.to; }
+    function apply() {
+      var f = Math.round(+from.value), t = Math.round(+to.value);
+      if (!isFinite(f) || from.value === '') f = o.min;
+      if (!isFinite(t) || to.value === '') t = o.max;
+      f = Math.min(Math.max(f, o.min), o.max);
+      t = Math.min(Math.max(t, o.min), o.max);
+      if (f > t) { var x = f; f = t; t = x; }
+      sl.update({ from: f, to: t });
+      show();
+    }
+    from.addEventListener('change', apply);
+    to.addEventListener('change', apply);
+    $in.on('change', show);
+    show();
+    // the boxes are the accessible control; take the mouse-only slider out of the tab order
+    jQuery(box).find('.irs-line').attr({ tabindex: '-1', 'aria-hidden': 'true' });
+    $in.attr({ 'aria-hidden': 'true', tabindex: '-1' });
+    jQuery(box).find('label.control-label').attr('for', 'year-from');
+  }
+
+  function quartoFixes() {
+    document.querySelectorAll('.quarto-color-scheme-toggle').forEach(function (a) {
+      a.setAttribute('aria-label', 'Switch between light and dark mode');
+      a.setAttribute('role', 'button');
+    });
+    // the citation appendix marks an item as a list item without a list around it
+    document.querySelectorAll('[role="listitem"]').forEach(function (li) {
+      if (!li.parentElement.closest('[role="list"], ul, ol')) li.removeAttribute('role');
+    });
+  }
+
+  window.addEventListener('load', function () {
+    setTimeout(function () { placeholders(); yearInputs(); quartoFixes(); }, 50);
+  });
+})();
+</script>
+```
