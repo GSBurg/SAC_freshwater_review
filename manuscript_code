@@ -1,0 +1,1048 @@
+# =============================================================================
+# Spatial autocorrelation (SAC) in freshwater ecosystems: a systematic review
+# R script to reproduce all figures of the main text and the supplement
+# =============================================================================
+#
+# Output (written to the folder set in `out_dir`, section 1.2)
+#
+#   Main text
+#     fig2_literature_overview.png     Figure 2  Geographic and temporal distribution
+#     fig3_habitat_taxa_climate.png    Figure 3  Habitats, spatial scale, taxa, climate
+#     fig4_objectives_factors.png      Figure 4  Objectives, factors and processes
+#     fig5_sac_range.png               Figure 5  Reported SAC ranges
+#
+#     (Figure 1, conceptual background, is prepared separately)
+#
+#   Supplement
+#     figS2_sac_methods.png            Figure S2 Methods and spatial metrics
+
+#     (Figure S1, screening flowchart, is prepared separately)
+#
+# Structure
+#   1 Setup              packages, output folder
+#   2 Data               load and clean the extraction table
+#   3 Shared settings    colours, themes, helper functions
+#   4-7                  Figures 2-5 (Figure 1 is conceptual and prepared separately)
+#   8-11                 Figures S2-S5 (Figure S1 prepared separately)
+#   12                   Image credits (PhyloPic)
+#
+# Run the script from top to bottom: later sections reuse objects created in
+# earlier ones (noted at the start of each section).
+#
+# Unit of analysis: one row of the extraction table = one analysis; several
+# analyses can come from the same study (Study_ID).
+#
+# Requirements: R >= 4.1, ggplot2 >= 3.5, patchwork >= 1.2. Install packages once:
+#   install.packages(c("googlesheets4", "tidyverse", "patchwork", "rnaturalearth",
+#                      "rnaturalearthdata", "countrycode", "rphylopic", "kgc",
+#                      "RColorBrewer", "openxlsx", "lme4", "lmerTest", "car", "sf", "grid"))
+# PhyloPic silhouettes and the base map are downloaded at run time (internet needed).
+# =============================================================================
+
+
+# 1 Setup ----------------------------------------------------------------------
+
+## 1.1 Packages ----
+library(googlesheets4)
+library(patchwork)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(countrycode)
+library(rphylopic)
+library(kgc)
+library(RColorBrewer)
+library(openxlsx)
+library(lme4)
+library(lmerTest)
+library(car)
+library(sf)
+library(grid)
+library(tidyverse)
+
+
+# Resolve plyr/dplyr conflicts
+count <- dplyr::count
+summarise <- dplyr::summarise
+summarize <- dplyr::summarize
+mutate <- dplyr::mutate
+filter <- dplyr::filter
+arrange <- dplyr::arrange
+select <- dplyr::select
+rename <- dplyr::rename
+recode <- dplyr::recode
+desc <- dplyr::desc
+
+## 1.2 Output folders ----
+out_dir <- "figures"
+results_dir <- "results"
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+dir.create(results_dir, showWarnings = FALSE, recursive = TRUE)
+
+
+# 2 Data -----------------------------------------------------------------------
+
+## 2.1 Load the extraction table ----
+# Replace by the archived copy of the data, e.g. dat_raw <- read_csv("data/sac_review_data.csv")
+data_url <- "https://docs.google.com/spreadsheets/d/18wJ4jaKuOS7ZxZsHrmGHUQq8LmENYrMlIo6gJSl9Ww4/edit?gid=0#gid=0"
+gs4_deauth()
+dat_raw <- read_sheet(data_url)
+
+## 2.2 Helper functions ----
+# Missing values and the text "NA" become "Not reported"
+clean_na <- function(x) {
+  x <- str_trim(as.character(x))
+  ifelse(is.na(x) | x == "NA", "Not reported", x)
+}
+# Columns with mixed numbers and text are read as lists; convert them to numbers
+list_to_chr <- function(x) str_trim(map_chr(x, ~ if (is.null(.x) || length(.x) == 0) NA_character_ else as.character(.x[[1]])))
+list_to_num <- function(x) suppressWarnings(as.numeric(list_to_chr(x)))
+
+
+## 2.3 Clean ----
+dat <- dat_raw %>%
+  dplyr::mutate(dplyr::across(where(is.character), as.factor)) %>%
+  dplyr::filter(!is.na(DOI)) %>%
+  droplevels() %>%
+  dplyr::mutate(row_id = dplyr::row_number()) %>%
+  dplyr::mutate(dplyr::across(dplyr::any_of(c("Climatic_region", "Freshwater_realm", "Habitat", "Target_group", "Target_level", "Scale_class", "SAC_role", "SAC_objective", "SAC_method", "Spatial_metric", "SAC_detected", "SAC_direction", "Directionality_considered", "Residual_SAC_tested", "Process_inferred", "Factor_affecting_SAC")), clean_na)) %>%
+  dplyr::mutate(Habitat = dplyr::recode(Habitat, "Reservoire" = "Reservoir")) %>%
+  dplyr::mutate(dplyr::across(dplyr::any_of(c("Study_extent_km", "Number_of_sites", "Number_of_data", "Number_of_water_bodies", "SAC_range_value_m")), list_to_num, .names = "{.col}_num"))
+
+
+
+## 2.4 Key numbers ----
+nrow(dat)
+n_distinct(dat$Study_ID)
+
+
+# 3 Shared settings ------------------------------------------------------------
+
+## 3.1 Colours ----
+grey_na <- "grey94"
+
+# Freshwater realm (colour-blind friendly: Okabe-Ito blue and green, brown, greys)
+realm_colors <- c("Lotic" = "#0072B2", "Lentic" = "#009E73", "Groundwater" = "#8C510A", "Multiple" = "#9E9E9E", "Other" = "#5E5E5E")
+realm_order <- c("Lotic", "Lentic", "Groundwater", "Other")
+
+# Grey ramp for count-based heatmaps and the climate map
+count_greys <- c("grey85", "grey10")
+
+# Continents (muted palette used consistently in map outlines and temporal panels)
+continent_order <- dat %>% count(Continent, name = "n") %>% arrange(desc(n)) %>% pull(Continent) %>% as.character()
+continent_colors <- c("Asia" = "#5F9D91", "Europe" = "#B9783C", "North America" = "#777BB0", "South America" = "#BC638A", "Oceania" = "#7E9F52", "Africa" = "#A9874D", "Antarctica" = "#7A7A7A", "Multiple" = "#8E8E8E")
+
+# Spatial scale classes (pink-purple sequence, light = local to dark = continental)
+scale_pref <- c("Local", "Landscape", "Regional", "Continental", "Global")
+scale_present <- unique(dat$Scale_class)
+scale_levels_all <- c(intersect(scale_pref, scale_present), setdiff(scale_present, scale_pref))
+scale_main <- setdiff(scale_levels_all, c("Multiple", "Not reported"))
+scale_seq <- c("#E9C7E2", "#D58AC8", "#A94FA5", "#6F2F78", "#2B0040", "#1A0026")
+scale_class_colors <- c(setNames(scale_seq[seq_along(scale_main)], scale_main), "Multiple" = "#8A8A8A", "Not reported" = "#BDBDBD")[scale_levels_all]
+
+
+
+# How SAC is considered (Paired palette)
+role_palette <- c("Signal" = "#FF7F00", "Challenge" = "#FDBF6F", "Both" = "#CAB2D6", "Other" = "grey80")
+
+# Ecological level (Paired palette, oranges)
+level_colors <- c("Community" = RColorBrewer::brewer.pal(12, "Paired")[8], "Population" = RColorBrewer::brewer.pal(12, "Paired")[7])
+
+# Categories shown in grey or after a gap
+grey_levels <- c("Multiple", "Not reported")
+
+## 3.2 Themes ----
+theme_review <- theme_minimal(base_size = 11) + theme(plot.title = element_text(size = 15, face = "bold", margin = margin(b = 10)), axis.text = element_text(size = 10, color = "grey25"), axis.title = element_text(size = 11, color = "grey20"), panel.grid.minor = element_blank(), panel.grid.major = element_line(color = "grey90", linewidth = 0.4), strip.text = element_text(size = 11, face = "bold", color = "grey15"), strip.background = element_blank(), legend.title = element_text(size = 10, face = "bold"), legend.text = element_text(size = 10))
+
+# Heatmaps: no grid lines
+theme_heat <- theme_review + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.spacing.y = unit(0.4, "lines"), panel.spacing.x = unit(1.2, "lines"), strip.placement = "outside", strip.clip = "off", axis.text.x = element_text(angle = 35, hjust = 1))
+
+# SAC range plots: light grey panels, no horizontal grid lines
+theme_range <- theme_review + theme(panel.grid.major.y = element_blank(), panel.background = element_rect(fill = "grey98", color = NA), strip.text = element_text(size = 10, face = "bold", color = "grey15"))
+
+## 3.3 Plot helpers ----
+# Legend inside the plot area; (x, y) = lower-left corner of the legend (0-1)
+inside_legend <- function(x, y) {
+  if (utils::packageVersion("ggplot2") >= "3.5.0") theme(legend.position = "inside", legend.position.inside = c(x, y), legend.justification = c(0, 0)) else theme(legend.position = c(x, y), legend.justification = c(0, 0))
+}
+
+# Take the legend out of a plot, to place it freely in a combined figure
+get_legend <- function(p) {
+  g <- ggplotGrob(p)
+  idx <- which(grepl("guide-box", g$layout$name) & vapply(g$grobs, inherits, logical(1), "gtable"))[1]
+  g$grobs[[idx]]
+}
+
+# Line breaks for long biological group names in narrow facet strips
+group_strip_labels <- c("Host-associated organisms" = "Host-\nassociated\norganisms", "Fungi & microbes" = "Fungi &\nmicrobes", "Algae & plants" = "Algae &\nplants")
+wrap_group <- function(x) ifelse(x %in% names(group_strip_labels), group_strip_labels[x], as.character(x))
+
+# Hand-drawn y-axis at the left panel edge (line, ticks, labels), used by the
+# UpSet plots: a regular axis would be moved away from the panel when patchwork
+# aligns the panel with wider panels below it
+axis_layers <- function(ylim, breaks, x0) {
+  out <- list(annotate("segment", x = x0, xend = x0, y = ylim[1], yend = ylim[2], color = "grey40", linewidth = 0.5))
+  if (length(breaks) > 0) out <- c(out, list(annotate("segment", x = x0 - 0.08, xend = x0, y = breaks, yend = breaks, color = "grey40", linewidth = 0.5), annotate("text", x = x0 - 0.13, y = breaks, label = breaks, hjust = 1, size = 10 / .pt, color = "grey25")))
+  out
+}
+
+## 3.4 Target groups and biological groups ----
+# Biological groups appear in the order of this list; target groups within a
+# group are sorted by number of analyses
+target_group_map <- c("Fish" = "Vertebrates", "Amphibians" = "Vertebrates", "Macroinvertebrates" = "Invertebrates", "Meiofauna" = "Invertebrates", "Zooplankton" = "Plankton", "Plankton" = "Plankton", "Phytoplankton" = "Plankton", "Diatoms" = "Algae & plants", "Periphyton" = "Algae & plants", "Macrophytes" = "Algae & plants", "Fungi" = "Fungi & microbes", "Microorganisms" = "Fungi & microbes", "Bacteria/Archaea" = "Fungi & microbes", "Parasites" = "Host-associated organisms", "Host-associated microorganisms" = "Host-associated organisms", "Multiple" = "Other", "Not reported" = "Other")
+target_unmapped <- setdiff(unique(dat$Target_group), names(target_group_map))
+target_group <- c(target_group_map, setNames(rep("Unassigned", length(target_unmapped)), target_unmapped))
+group_sequence <- unique(c(unname(target_group_map), "Unassigned"))
+target_order <- dat %>% count(Target_group, name = "n") %>% mutate(group = factor(unname(target_group[Target_group]), levels = group_sequence)) %>% arrange(group, desc(n)) %>% pull(Target_group)
+
+## 3.5 Habitats and freshwater realms ----
+# Habitats not listed here (e.g. "Canal", no usable estimates) are not shown
+habitat_order <- c("River", "Stream", "Lake", "Pond", "Reservoir", "Wetland", "Groundwater", "Experimental", "Multiple")
+habitat_realm <- c("River" = "Lotic", "Stream" = "Lotic", "Lake" = "Lentic", "Pond" = "Lentic", "Reservoir" = "Lentic", "Wetland" = "Lentic", "Groundwater" = "Groundwater", "Experimental" = "Other", "Multiple" = "Other")
+
+## 3.6 Climatic regions ----
+# Most to fewest analyses; "Multiple" and "Not reported" last
+climate_main <- dat %>% filter(!Climatic_region %in% grey_levels) %>% count(Climatic_region) %>% arrange(desc(n)) %>% pull(Climatic_region)
+climate_order <- c(climate_main, intersect(grey_levels, unique(dat$Climatic_region)))
+
+## 3.7 PhyloPic silhouettes ----
+target_uuids <- c("Macroinvertebrates" = "777bbd68-7924-4a4d-a5dd-452111d2a823", "Bacteria/Archaea" = "471ca883-4658-43d1-80aa-23cac2e1acbe", "Fish" = "f6a7b999-30eb-418d-8eae-7e351a58a707", "Diatoms" = "8eadd350-45ac-4bc2-8994-b163aee72609", "Zooplankton" = "be9c4ede-4f33-4800-a202-4c73f493b5e6", "Phytoplankton" = "ab5abba0-21b6-4e25-9fe5-29e09c96f4c7", "Macrophytes" = "c078c894-406d-420d-82eb-fd29cdb28f93", "Microorganisms" = "6fe75b0b-1488-4193-8523-f240c2d59575", "Amphibians" = "99c89d19-488d-496a-9fb9-cf4f76da7297", "Parasites" = "6334c9dd-900d-433b-be97-7c4e91e477b5", "Periphyton" = "1f26947c-f255-4374-aca5-1c62d29fd69b", "Fungi" = "641a3d03-1448-4fa2-af30-46b5298ff03a", "Host-associated microorganisms" = "56d01eab-d085-4f8b-a1ab-262f3aaad052", "Plankton" = "be9c4ede-4f33-4800-a202-4c73f493b5e6", "Meiofauna" = "c314c714-54e3-4f66-8079-e6248115b53e")
+
+# Width/height ratio of each silhouette, so that wide ones are drawn smaller
+get_aspect <- function(uuid) tryCatch({ img <- get_phylopic(uuid, format = "raster", height = 256); dim(img)[2] / dim(img)[1] }, error = function(e) NA_real_)
+icon_aspect <- map_dbl(target_uuids, get_aspect)
+icon_aspect[is.na(icon_aspect)] <- 1
+
+# Manual size adjustment per silhouette (1 = automatic)
+icon_scale <- setNames(rep(1, length(target_uuids)), names(target_uuids))
+icon_scale[c("Meiofauna", "Parasites", "Phytoplankton", "Diatoms")] <- c(0.5, 0.75, 0.85, 0.85)
+icon_scale[c("Macroinvertebrates", "Fungi", "Microorganisms", "Periphyton", "Zooplankton")] <- c(1.2, 1.15, 1.1, 1.1, 1.2)
+
+icon_height <- function(groups, base = 1, max_aspect = 1.2) unname(base * pmin(1, max_aspect / icon_aspect[groups]) * icon_scale[groups])
+phylopic_layers <- function(d, x, y) lapply(seq_len(nrow(d)), function(i) geom_phylopic(data = d[i, ], aes(x = .data[[x]], y = .data[[y]], uuid = uuid), height = d$h[i], inherit.aes = FALSE))
+
+## 3.8 Heatmap helpers ----
+# Cell colour: hue = freshwater realm, intensity = number of analyses
+shade_col <- function(hue, n, n_max, min_t = 0.3) map2_chr(hue, n, function(h, k) { if (is.na(h) || k <= 0) return(grey_na); t <- min_t + (1 - min_t) * k / n_max; colorRampPalette(c("white", h))(101)[round(t * 100) + 1] })
+
+# Count table of two variables, with facet groups and the realm hue of each cell
+heat_counts <- function(xvar, yvar, x_order, y_order, x_group, y_group, hue_from = c("y", "x")) {
+  hue_from <- match.arg(hue_from)
+  dat %>% count(.data[[xvar]], .data[[yvar]], name = "n") %>% rename(xcat = 1, ycat = 2) %>% complete(xcat = x_order, ycat = y_order, fill = list(n = 0)) %>% mutate(xgroup = factor(unname(x_group[xcat]), levels = unique(unname(x_group[x_order]))), ygroup = factor(unname(y_group[ycat]), levels = unique(unname(y_group[y_order])))) %>% filter(!is.na(xgroup), !is.na(ygroup)) %>% mutate(hue = unname(realm_colors[as.character(if (hue_from == "y") ygroup else xgroup)]), xcat = factor(xcat, levels = x_order), ycat = factor(ycat, levels = rev(y_order)))
+}
+
+plot_heat <- function(d, n_max, title, strip_x = FALSE, strip_y = TRUE, legend_name = "Analyses", strip_y_size = 10, y_wrap = NULL) {
+  d <- d %>% mutate(cell_col = shade_col(hue, n, n_max), dark_text = n <= n_max * 0.55)
+  ggplot(d, aes(x = xcat, y = ycat)) +
+    geom_tile(aes(fill = cell_col), color = "white", linewidth = 0.6) +
+    geom_point(data = filter(d, n > 0), aes(color = n), alpha = 0) +
+    geom_text(data = filter(d, n > 0, dark_text), aes(label = n), size = 3.2, fontface = "bold", color = "grey15") +
+    geom_text(data = filter(d, n > 0, !dark_text), aes(label = n), size = 3.2, fontface = "bold", color = "white") +
+    scale_fill_identity() +
+    scale_color_gradient(low = "grey85", high = "grey10", limits = c(1, n_max), name = legend_name) +
+    facet_grid(ygroup ~ xgroup, scales = "free", space = "free", switch = "y", labeller = labeller(xgroup = wrap_group, ygroup = if (is.null(y_wrap)) label_value else label_wrap_gen(y_wrap))) +
+    labs(title = title, x = NULL, y = NULL) +
+    theme_heat +
+    theme(strip.text.x = if (strip_x) element_text(size = 10, face = "bold") else element_blank(), strip.text.y.left = if (strip_y) element_text(angle = 0, hjust = 1, size = strip_y_size, face = "bold", lineheight = 0.9) else element_blank())
+}
+
+# =============================================================================
+# ================================= AIM 1 =====================================
+# =============================================================================
+
+# 4 Figure 2 - Geographic and temporal distribution of the analyses ------------
+
+## 4.1 Panel A: analyses per country ----
+world <- ne_countries(scale = "medium", returnclass = "sf") %>% mutate(iso3 = ifelse(iso_a3 == "-99", adm0_a3, iso_a3))
+country_counts <- dat %>% mutate(Country = str_trim(as.character(Country))) %>% filter(Country != "Multiple") %>% count(Country, name = "n_analyses") %>% mutate(iso3 = countrycode(Country, origin = "country.name", destination = "iso3c", custom_match = c("UK" = "GBR", "USA" = "USA", "Congo" = "COG")))
+map_data <- world %>% left_join(country_counts, by = "iso3")
+
+# Countries that could not be matched to the map (should be none)
+country_counts %>% filter(is.na(iso3) | !iso3 %in% world$iso3)
+
+# Continent outlines (countries merged per Natural Earth continent)
+s2_was_on <- sf::sf_use_s2()
+suppressMessages(sf::sf_use_s2(FALSE))
+continents <- world %>% filter(continent != "Seven seas (open ocean)") %>% sf::st_make_valid() %>% group_by(continent) %>% summarise(geometry = sf::st_union(geometry), .groups = "drop")
+suppressMessages(sf::sf_use_s2(s2_was_on))
+
+p_map <- ggplot(map_data) +
+  geom_sf(aes(fill = n_analyses), color = "grey82", linewidth = 0.12) +
+  geom_sf(data = continents, aes(color = continent), fill = NA, linewidth = 0.25, alpha = 0.95, inherit.aes = FALSE) +
+  scale_color_manual(values = continent_colors, guide = "none") +
+  scale_fill_gradientn(colours = c("#F3F3F3", "#D0D0D0", "#A2A2A2", "#686868"), na.value = "white", name = "Number of\nanalyses") +
+  guides(fill = guide_colorbar(direction = "vertical", barheight = unit(3.5, "cm"), barwidth = unit(0.5, "cm"))) +
+  labs(title = "a. Geographic distribution of analyses") +
+  theme_void() +
+  theme(legend.title = element_text(size = 10, face = "bold"), legend.text = element_text(size = 9), plot.title = element_text(size = 15, face = "bold", margin = margin(b = 8)), plot.background = element_rect(fill = "white", colour = NA)) +
+  inside_legend(0.01, 0.2)
+
+## 4.2 Data for panels B and C ----
+annual_data <- dat %>% count(Publication_year, Continent, name = "n_analyses") %>% complete(Publication_year = full_seq(Publication_year, 1), Continent, fill = list(n_analyses = 0)) %>% mutate(Continent = factor(Continent, levels = rev(continent_order)))
+cumulative_data <- annual_data %>% arrange(Continent, Publication_year) %>% group_by(Continent) %>% mutate(cumulative = cumsum(n_analyses)) %>% ungroup()
+cumulative_labels <- cumulative_data %>% group_by(Publication_year) %>% summarise(total = sum(cumulative)) %>% filter(Publication_year %% 5 == 0 | Publication_year == max(Publication_year))
+
+## 4.3 Panel B: cumulative number of analyses ----
+p_cumulative <- ggplot(cumulative_data, aes(x = Publication_year, y = cumulative, fill = Continent)) +
+  geom_area(alpha = 0.95, color = "white", linewidth = 0.3) +
+  geom_segment(data = cumulative_labels, aes(x = Publication_year, xend = Publication_year, y = 0, yend = total), inherit.aes = FALSE, color = "grey20", linewidth = 0.7) +
+  geom_point(data = cumulative_labels, aes(x = Publication_year, y = total), inherit.aes = FALSE, color = "grey20", size = 3) +
+  geom_text(data = cumulative_labels, aes(x = Publication_year, y = total, label = total), inherit.aes = FALSE, vjust = -1.1, size = 3.6, fontface = "bold", color = "grey20") +
+  scale_fill_manual(values = continent_colors, breaks = continent_order, guide = "none") +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+  labs(title = "b.  Cumulative number of analyses per continent", x = "Publication year", y = "Cumulative number of analyses") +
+  theme_review
+
+## 4.4 Panel C: analyses per year ----
+p_bars <- ggplot(annual_data, aes(x = Publication_year, y = n_analyses, fill = Continent)) +
+  geom_col(width = 0.85, color = "white", linewidth = 0.2) +
+  scale_fill_manual(values = continent_colors, breaks = continent_order) +
+  scale_x_continuous(breaks = scales::pretty_breaks(n = 8)) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  guides(fill = guide_legend(nrow = 1)) +
+  labs(title = "c. Analyses per continent and year", x = "Publication year", y = "Number of analyses", fill = NULL) +
+  theme_review
+
+## 4.5 Combine and save ----
+p_fig2 <- p_map / ((p_cumulative | p_bars) + plot_layout(guides = "collect") & theme(legend.position = "bottom", legend.justification = "center")) + plot_layout(heights = c(1.7, 1))
+p_fig2
+
+ggsave(file.path(out_dir, "fig2_literature_overview.png"), p_fig2, width = 14, height = 13, dpi = 300, bg = "white")
+
+
+# =============================================================================
+# ================================= AIM 2 =====================================
+# =============================================================================
+
+# 5 Figure 3 - Habitats, spatial scale, taxa, ecological level and climate -----
+# The panels of this section are reused in Figure S4 (section 10).
+
+## 5.1 Panel A: spatial scale per habitat ----
+scale_hab <- dat %>% count(Habitat, Scale_class, name = "n") %>% filter(Habitat %in% habitat_order) %>% group_by(Habitat) %>% mutate(share = n / sum(n), n_habitat = sum(n)) %>% ungroup() %>% mutate(Habitat = factor(Habitat, levels = habitat_order), Realm = factor(unname(habitat_realm[as.character(Habitat)]), levels = realm_order), Scale_class = factor(Scale_class, levels = scale_levels_all))
+habitat_n <- scale_hab %>% distinct(Habitat, Realm, n_habitat)
+
+p_scale_full <- ggplot(scale_hab, aes(x = Habitat, y = share, fill = Scale_class)) +
+  geom_col(width = 0.75, color = "white", linewidth = 0.3) +
+  geom_text(data = habitat_n, aes(x = Habitat, y = 1.02, label = paste0("n = ", n_habitat)), inherit.aes = FALSE, vjust = 0, size = 2.9, color = "grey30") +
+  scale_fill_manual(values = scale_class_colors, name = "Spatial scale") +
+  scale_y_continuous(labels = scales::percent, breaks = seq(0, 1, 0.25), expand = expansion(mult = c(0, 0.06))) +
+  facet_grid(. ~ Realm, scales = "free_x", space = "free_x") +
+  labs(title = "a. Spatial scale \u00d7 Habitat", x = NULL, y = "Share of analyses") +
+  theme_review +
+  theme(axis.text.x = element_text(size = 10, color = "grey20", hjust = 0.5, vjust = 1, margin = margin(t = 3)), panel.grid.major.x = element_blank(), panel.spacing.x = unit(1.2, "lines"), strip.text.x = element_blank(), legend.position = "right")
+
+legend_scale <- wrap_elements(full = get_legend(p_scale_full))
+# free(): the panel stays aligned with panel B, but its axis labels sit next to it
+p_scale <- free(p_scale_full + theme(legend.position = "none", plot.margin = margin(b = 6), axis.title.y = element_text(margin = margin(r = 4))), type = "space", side = "l")
+
+## 5.2 Panel B: taxa x habitat ----
+d_taxa <- heat_counts("Habitat", "Target_group", habitat_order, target_order, habitat_realm, target_group, hue_from = "x")
+p_taxa_full <- plot_heat(d_taxa, max(d_taxa$n), "b.  Taxa \u00d7 Habitat", strip_x = FALSE, strip_y = TRUE, strip_y_size = 14, y_wrap = 13) + theme(legend.position = "right", axis.text.x = element_text(size = 10, color = "grey20", angle = 0, hjust = 0.5, vjust = 1, margin = margin(t = 3)))
+legend_taxa <- wrap_elements(full = get_legend(p_taxa_full))
+p_taxa <- p_taxa_full + theme(legend.position = "none", plot.margin = margin(r = 0))
+
+## 5.3 Panel C: ecological level per taxon, with silhouettes ----
+level_df <- dat %>% filter(Target_level %in% c("Community", "Population")) %>% count(Target_group, Target_level) %>% complete(Target_group = target_order, Target_level = c("Community", "Population"), fill = list(n = 0)) %>% group_by(Target_group) %>% mutate(total = sum(n), pct = ifelse(total > 0, n / total, 0)) %>% ungroup() %>% mutate(x = ifelse(Target_level == "Community", -n, n), bio_group = factor(unname(target_group[Target_group]), levels = group_sequence), Target_group = factor(Target_group, levels = rev(target_order))) %>% filter(!is.na(bio_group))
+max_comm <- max(filter(level_df, Target_level == "Community")$n)
+max_pop <- max(filter(level_df, Target_level == "Population")$n)
+level_lims <- c(-max_comm * 1.25, max_pop * 2.2)
+comm_labels <- level_df %>% filter(Target_level == "Community", n > 0)
+pop_labels <- level_df %>% filter(Target_level == "Population", n > 0) %>% mutate(label = paste0(n, " (", round(pct * 100), "%)"))
+
+# Level names above the bars: "Community" ends at the zero line, "Population (share)" starts there
+first_group <- levels(droplevels(level_df$bio_group))[1]
+level_heads <- tibble(bio_group = factor(first_group, levels = levels(level_df$bio_group)), x = c(-max_comm * 0.03, 0, max_pop * 0.12), label = c("Community", "|", "Population (share)"), hjust = c(1, 0.5, 0), col = c(level_colors[["Community"]], "grey30", level_colors[["Population"]]))
+# x-axis title centred under the zero line
+level_title_hjust <- (0 - level_lims[1]) / diff(level_lims)
+
+p_level <- free(ggplot(level_df, aes(x = x, y = Target_group, fill = Target_level)) +
+  geom_col(width = 0.65) +
+  geom_vline(xintercept = 0, color = "grey30", linewidth = 0.4) +
+  geom_text(data = comm_labels, aes(x = x, y = Target_group, label = n), inherit.aes = FALSE, hjust = 1.25, size = 3, fontface = "bold", color = "grey30") +
+  geom_text(data = pop_labels, aes(x = x, y = Target_group, label = label), inherit.aes = FALSE, hjust = -0.15, size = 3, fontface = "bold", color = "grey30") +
+  geom_text(data = level_heads, aes(x = x, y = Inf, label = label, hjust = hjust), inherit.aes = FALSE, color = level_heads$col, vjust = -0.8, size = 11 / .pt, fontface = "bold") +
+  scale_fill_manual(values = level_colors) +
+  scale_x_continuous(limits = level_lims, breaks = function(lims) { b <- pretty(c(-max_comm, max_pop), n = 6); b[b >= -max_comm & b <= max_pop] }, labels = abs) +
+  facet_grid(bio_group ~ ., scales = "free_y", space = "free_y") +
+  coord_cartesian(clip = "off") +
+  labs(title = "c. Taxa \u00d7 Ecological level", x = "Number of analyses", y = NULL) +
+  theme_review +
+  theme(axis.text.y = element_blank(), panel.grid.major.y = element_blank(), panel.background = element_rect(fill = "grey98", color = NA), panel.spacing.y = unit(0.4, "lines"), strip.text.y = element_blank(), legend.position = "none", plot.margin = margin(l = 0), plot.title = element_text(size = 15, face = "bold", margin = margin(b = 26)), axis.title.x = element_text(hjust = level_title_hjust, margin = margin(t = 4))), type = "space", side = "b")
+
+# Silhouette column to the right of panel C
+icon_col <- tibble(tg = target_order) %>% mutate(Target_group = factor(tg, levels = rev(target_order)), bio_group = factor(unname(target_group[tg]), levels = group_sequence), uuid = unname(target_uuids[tg]), h = icon_height(tg, base = 0.8, max_aspect = 1.4), x = 0.5)
+p_icon_col <- ggplot(icon_col, aes(x = x, y = Target_group)) +
+  geom_blank() +
+  phylopic_layers(filter(icon_col, !is.na(uuid)), "x", "Target_group") +
+  facet_grid(bio_group ~ ., scales = "free_y", space = "free_y") +
+  scale_x_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  theme_void() +
+  theme(strip.text = element_blank(), panel.spacing.y = unit(0.4, "lines"))
+
+## 5.4 Panel D: analyses per climatic region (map) ----
+# Climate zones: Koppen-Geiger classification (kgc package), translated into the
+# climatic regions of the review. The map shows where each climate type occurs,
+# not the study sites. "Alpine or montane", "Multiple" and "Not reported" are not mapped.
+utils::data("climatezones", package = "kgc", envir = environment())
+kg05 <- climatezones %>% mutate(Lon = floor(Lon * 2) / 2 + 0.25, Lat = floor(Lat * 2) / 2 + 0.25, Cls = as.character(Cls)) %>% count(Lon, Lat, Cls, name = "k") %>% group_by(Lon, Lat) %>% slice_max(k, n = 1, with_ties = FALSE) %>% ungroup()
+
+koppen_to_review <- function(cls) case_when(str_detect(cls, "^A") ~ "Tropical", str_detect(cls, "^B") ~ "Arid or semi-arid", str_detect(cls, "^Cs") ~ "Mediterranean", cls %in% c("Cfa", "Cwa") ~ "Subtropical", str_detect(cls, "^C") ~ "Temperate", cls %in% c("Dfa", "Dfb", "Dwa", "Dwb", "Dsa", "Dsb") ~ "Temperate", str_detect(cls, "^D") ~ "Boreal", str_detect(cls, "^E") ~ "Polar", TRUE ~ NA_character_)
+
+# Analyses per climatic region (for the caption)
+clim_n <- dat %>% count(Climatic_region, name = "n")
+clim_n
+
+kg_map <- kg05 %>% mutate(region = koppen_to_review(Cls)) %>% filter(!is.na(region)) %>% left_join(clim_n, by = c("region" = "Climatic_region")) %>% mutate(n = replace_na(n, 0L))
+world_outline <- ne_countries(scale = "medium", returnclass = "sf")
+
+p_climate_map <- ggplot() +
+  geom_tile(data = kg_map, aes(x = Lon, y = Lat, fill = na_if(n, 0L)), width = 0.5, height = 0.5) +
+  geom_sf(data = world_outline, fill = NA, color = "grey70", linewidth = 0.15) +
+  scale_fill_gradientn(colours = count_greys, na.value = "white", limits = c(1, max(kg_map$n)), name = "Number of\nanalyses") +
+  guides(fill = guide_colorbar(direction = "vertical", barheight = unit(1.8, "cm"), barwidth = unit(0.45, "cm"))) +
+  coord_sf(expand = FALSE) +
+  labs(title = "d. Analyses per climatic region") +
+  theme_void() +
+  theme(plot.background = element_rect(fill = "white", colour = "grey70", linewidth = 1.6), panel.background = element_rect(fill = "white", colour = NA), plot.title = element_text(size = 15, face = "bold", margin = margin(b = 8)), legend.title = element_text(size = 9, face = "bold"), legend.text = element_text(size = 8), plot.margin = margin(8, 8, 8, 8)) +
+  inside_legend(0.01, 0.03)
+# wrap_elements(): the map keeps its proportions and the border frames the whole cell
+p_climate_panel <- wrap_elements(full = p_climate_map)
+
+## 5.5 Realm header ----
+# Realm names in realm colours above panel A (same facets and spacing as panel A)
+hdr_cols <- scale_hab %>% distinct(Habitat, Realm)
+hdr_lab <- hdr_cols %>% count(Realm, name = "k") %>% mutate(x = (k + 1) / 2)
+
+p_realm_header <- ggplot(hdr_cols, aes(x = Habitat, y = 0)) +
+  geom_blank() +
+  geom_text(data = hdr_lab, aes(x = x, y = 0, label = Realm, color = Realm), inherit.aes = FALSE, size = 17 / .pt, fontface = "bold") +
+  scale_color_manual(values = realm_colors, guide = "none") +
+  facet_grid(. ~ Realm, scales = "free_x", space = "free_x") +
+  coord_cartesian(clip = "off") +
+  theme_void() +
+  theme(strip.text = element_blank(), panel.spacing.x = unit(1.2, "lines"), plot.margin = margin(t = 5, b = 18))
+
+## 5.6 Combine and save ----
+# Layout letters are filled in the order of the plots: A header, B panel A,
+# C panel D (map), D panel B, E panel C, F silhouettes
+layout_habitat <- "
+AAAACC
+BBBBCC
+DDDDEF
+"
+p_fig3_core <- p_realm_header + p_scale + p_climate_panel + p_taxa + p_level + p_icon_col + plot_layout(design = layout_habitat, widths = c(0.85, 0.85, 0.85, 0.85, 2.3, 0.35), heights = c(0.09, 0.65, 1.4)) + plot_annotation(theme = theme(plot.margin = margin(t = 5, r = 5, b = 30, l = 5)))
+
+# Legends of panels A and B in the empty top-left corner (shares of the figure)
+p_fig3 <- wrap_elements(full = p_fig3_core) + inset_element(wrap_elements(full = legend_scale / legend_taxa), left = 0.005, bottom = 0.62, right = 0.13, top = 0.95, align_to = "full")
+p_fig3
+
+ggsave(file.path(out_dir, "fig3_habitat_taxa_climate.png"), p_fig3, width = 18, height = 13.5, dpi = 300, bg = "white")
+
+
+
+
+# =============================================================================
+# ================================= AIM 3 =====================================
+# =============================================================================
+# Descriptive summary of SAC detection, direction and methods ------------------
+
+# Helper for single-choice variables
+summarise_single <- function(data, variable) {
+  data %>%
+    filter(!is.na({{ variable }}), {{ variable }} != "") %>%
+    count({{ variable }}, name = "n") %>%
+    mutate(proportion = n / sum(n), percent = round(proportion * 100, 1)) %>%
+    arrange(desc(n))
+}
+
+# Single-choice variables
+sac_detected_summary <- dat %>% summarise_single(SAC_detected)
+sac_direction_summary <- dat %>% summarise_single(SAC_direction)
+directionality_summary <- dat %>% summarise_single(Directionality_considered)
+residual_sac_summary <- dat %>% summarise_single(Residual_SAC_tested)
+
+sac_detected_summary
+sac_direction_summary
+directionality_summary
+residual_sac_summary
+
+# Multiple-choice variables; percentages use analyses with reported information
+spatial_metric_summary <- dat %>%
+  filter(!is.na(Spatial_metric), Spatial_metric != "", Spatial_metric != "Not reported") %>%
+  separate_rows(Spatial_metric, sep = ",\\s*") %>%
+  mutate(Spatial_metric = str_trim(Spatial_metric)) %>%
+  distinct(Analysis_ID, Spatial_metric) %>%
+  count(Spatial_metric, name = "n") %>%
+  mutate(percent = round(100 * n / n_distinct(dat$Analysis_ID[!is.na(dat$Spatial_metric) & dat$Spatial_metric != "" & dat$Spatial_metric != "Not reported"]), 1)) %>%
+  arrange(desc(n))
+
+sac_method_summary <- dat %>%
+  filter(!is.na(SAC_method), SAC_method != "", SAC_method != "Not reported") %>%
+  separate_rows(SAC_method, sep = ",\\s*") %>%
+  mutate(SAC_method = str_trim(SAC_method)) %>%
+  distinct(Analysis_ID, SAC_method) %>%
+  count(SAC_method, name = "n") %>%
+  mutate(percent = round(100 * n / n_distinct(dat$Analysis_ID[!is.na(dat$SAC_method) & dat$SAC_method != "" & dat$SAC_method != "Not reported"]), 1)) %>%
+  arrange(desc(n))
+
+spatial_metric_summary
+sac_method_summary
+print(sac_method_summary, n = Inf)
+
+
+# Residual SAC testing when SAC was detected and treated
+# as a challenge or as both a signal and a challenge
+
+residual_detected_challenge <- dat %>%
+  filter(
+    SAC_detected == "yes",
+    SAC_role %in% c("Challenge", "Both"),
+    Residual_SAC_tested %in% c("Yes", "No")
+  ) %>%
+  summarise(
+    n_reported = n(),
+    n_tested = sum(Residual_SAC_tested == "Yes"),
+    percent_tested = round(100 * n_tested / n_reported, 1)
+  )
+
+residual_detected_challenge
+
+
+
+# =============================================================================
+# ================================= AIM 4 =====================================
+# =============================================================================
+
+# 6 Figure 4 - Objectives, and factors and processes reported for SAC ---------
+
+## 6.1 Category definitions ----
+# Objectives are grouped by keywords (check printed mapping in 6.2)
+objective_group <- function(x) {
+  l <- tolower(x)
+  case_when(str_detect(l, "non-?independ|independ|account|control|correct|residual|nuisance") ~ "Account for non-independence", str_detect(l, "infer|process|mechanis") ~ "Infer processes", str_detect(l, "predict|forecast|interpol|krig|map") ~ "Predict spatial patterns", str_detect(l, "detect|describ|quantif|characteri|structure|pattern|range|scale|test") ~ "Detect spatial structure", TRUE ~ "Other")
+}
+objective_levels <- c("Detect spatial structure", "Infer processes", "Account for non-independence", "Predict spatial patterns", "Other")
+
+process_levels <- c("Dispersal limitation", "Species sorting or environmental filtering", "Mass effects", "Biotic interactions", "Neutral or stochastic processes", "Historical processes")
+# Rare factors merged into broader classes
+factor_map <- c("Body size" = "Organism traits", "Life-history characteristics" = "Organism traits", "ID method/resolution" = "Methodological", "Sampling method" = "Methodological", "Eutrophication" = "Other", "Host genetics" = "Other", "Priority effect" = "Other", "Spatial isolation" = "Other")
+factor_levels <- c("Dispersal ability", "Barriers or fragmentation", "Organism traits", "Taxonomic identity", "Environmental heterogeneity", "Habitat type", "Seasonality", "Spatial scale", "Methodological", "Other")
+factor_theme <- c("Dispersal ability" = "Dispersal &\nconnectivity", "Barriers or fragmentation" = "Dispersal &\nconnectivity", "Organism traits" = "Organism", "Taxonomic identity" = "Organism", "Environmental heterogeneity" = "Environment", "Habitat type" = "Environment", "Seasonality" = "Environment", "Spatial scale" = "Scale &\nmethods", "Methodological" = "Scale &\nmethods", "Other" = "Other")
+theme_levels <- unique(unname(factor_theme))
+
+## 6.2 Per-analysis attributes ----
+attr_df <- dat %>% transmute(row_id, Study_ID, role = case_when(str_detect(tolower(SAC_role), "both") ~ "Both", str_detect(tolower(SAC_role), "chal") ~ "Challenge", str_detect(tolower(SAC_role), "sig") ~ "Signal", TRUE ~ "Other"), realm = ifelse(Freshwater_realm %in% names(realm_colors), Freshwater_realm, "Other"))
+attr_df %>% count(role)
+
+obj_an <- dat %>% select(row_id, SAC_objective) %>% separate_rows(SAC_objective, sep = ",\\s*") %>% mutate(SAC_objective = str_trim(SAC_objective)) %>% filter(SAC_objective != "Not reported") %>% mutate(objective = objective_group(SAC_objective)) %>% distinct(row_id, objective) %>% left_join(attr_df, by = "row_id") %>% mutate(objective = factor(objective, levels = objective_levels))
+
+# Check: raw objective -> objective group
+dat %>% select(SAC_objective) %>% separate_rows(SAC_objective, sep = ",\\s*") %>% distinct() %>% mutate(group = objective_group(str_trim(SAC_objective))) %>% arrange(group) %>% print(n = Inf)
+
+## 6.3 Panel A: combinations of objectives (UpSet plot) ----
+# Each bar = analyses with exactly the combination of objectives marked below;
+# bars coloured by how SAC is considered. Counts analyses.
+obj_sets <- obj_an %>% group_by(row_id) %>% summarise(objectives = list(sort(unique(as.character(objective)))), .groups = "drop") %>% left_join(attr_df %>% select(row_id, role), by = "row_id") %>% mutate(role = factor(role, levels = names(role_palette)))
+combo_key <- function(v) map_chr(v, ~ paste(.x, collapse = " + "))
+combo_n <- obj_sets %>% mutate(key = combo_key(objectives)) %>% count(key, name = "n") %>% arrange(desc(n)) %>% mutate(x = row_number())
+combo_n
+K <- nrow(combo_n)
+x_lim <- c(0.4, K + 0.6)
+
+# Bars stacked by hand (Both, Challenge, Signal), so each segment can be cut to
+# the visible part of the interrupted y-axis
+bar_stack <- obj_sets %>% mutate(key = combo_key(objectives)) %>% count(key, role, name = "n") %>% left_join(select(combo_n, key, x), by = "key") %>% mutate(role = factor(role, levels = names(role_palette))) %>% arrange(x, desc(as.integer(role))) %>% group_by(x) %>% mutate(ymax = cumsum(n), ymin = ymax - n) %>% ungroup()
+
+# Interrupted y-axis if the tallest bar is much taller than the others
+y_low <- c(0, ceiling(combo_n$n[2] * 1.25 / 10) * 10)
+has_break <- combo_n$n[1] > y_low[2] * 1.5
+y_high <- c(floor(combo_n$n[1] * 0.93 / 10) * 10, ceiling(combo_n$n[1] * 1.05 / 10) * 10)
+
+bars_part <- function(ylim, breaks) {
+  d <- bar_stack %>% mutate(ymin_c = pmin(pmax(ymin, ylim[1]), ylim[2]), ymax_c = pmin(pmax(ymax, ylim[1]), ylim[2])) %>% filter(ymax_c > ymin_c)
+  ggplot(d) +
+    geom_rect(aes(xmin = x - 0.35, xmax = x + 0.35, ymin = ymin_c, ymax = ymax_c, fill = role), color = "white", linewidth = 0.3) +
+    axis_layers(ylim, breaks, x_lim[1]) +
+    scale_fill_manual(values = role_palette, name = "SAC considered as", drop = TRUE) +
+    scale_x_continuous(limits = x_lim, oob = scales::oob_keep, expand = c(0, 0)) +
+    scale_y_continuous(limits = ylim, breaks = breaks, expand = c(0, 0)) +
+    coord_cartesian(clip = "off") +
+    theme_review +
+    theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), panel.grid.major.x = element_blank(), panel.grid.minor = element_blank())
+}
+# Break symbol: one slash at each cut end of the axis
+break_slash <- function(y, ylim) annotate("segment", x = x_lim[1] - 0.18, xend = x_lim[1] + 0.18, y = y - 0.06 * diff(ylim), yend = y + 0.06 * diff(ylim), color = "grey25", linewidth = 0.7)
+
+low_breaks <- pretty(y_low, n = 5)
+low_breaks <- low_breaks[low_breaks >= y_low[1] & low_breaks <= y_low[2]]
+panel_title <- element_text(size = 15, face = "bold", margin = margin(b = 10))
+
+# Lower part of the bars, with the legend inside the panel
+p_low <- bars_part(y_low, low_breaks) +
+  geom_text(data = filter(combo_n, n <= y_low[2]), aes(x = x, y = n, label = n), inherit.aes = FALSE, vjust = -0.4, size = 3.4, fontface = "bold", color = "grey20") +
+  annotate("text", x = x_lim[1] - 0.75, y = mean(y_low), label = "Number of analyses", angle = 90, size = 12 / .pt, fontface = "bold", color = "grey15") +
+  theme(plot.margin = margin(t = 2, b = 0), legend.background = element_rect(fill = "white", colour = NA)) +
+  inside_legend(0.62, 0.45)
+
+if (has_break) {
+  high_breaks <- pretty(y_high, n = 2)
+  high_breaks <- high_breaks[high_breaks > y_high[1] & high_breaks < y_high[2]]
+  p_low <- p_low + break_slash(y_low[2], y_low)
+  p_high <- bars_part(y_high, high_breaks) +
+    geom_text(data = filter(combo_n, n > y_low[2]), aes(x = x, y = n, label = n), inherit.aes = FALSE, vjust = -0.4, size = 3.4, fontface = "bold", color = "grey20") +
+    break_slash(y_high[1], y_high) +
+    labs(title = "a. Why was SAC studied?") +
+    theme(legend.position = "none", plot.margin = margin(b = 2), panel.grid.major.y = element_blank(), plot.title.position = "plot", plot.title = panel_title)
+} else {
+  p_low <- p_low + labs(title = "a. Why was SAC studied?") + theme(plot.title.position = "plot", plot.title = panel_title)
+}
+
+# Dot matrix: which objectives form each combination
+mat_rows <- rev(objective_levels)
+mat_df <- expand_grid(x = 1:K, objective = objective_levels) %>% left_join(select(combo_n, x, key), by = "x") %>% mutate(member = map2_lgl(objective, key, ~ .x %in% strsplit(.y, " + ", fixed = TRUE)[[1]]), y = match(objective, mat_rows))
+mat_lines <- mat_df %>% filter(member) %>% group_by(x) %>% summarise(ymin = min(y), ymax = max(y), .groups = "drop") %>% filter(ymin < ymax)
+mat_labels <- tibble(y = seq_along(mat_rows), label = ifelse(mat_rows == "Account for non-independence", "Account for\nnon-independence", mat_rows))
+
+p_mat <- ggplot(mat_df, aes(x = x, y = y)) +
+  geom_point(data = filter(mat_df, !member), color = "grey88", size = 3.8) +
+  geom_segment(data = mat_lines, aes(x = x, xend = x, y = ymin, yend = ymax), inherit.aes = FALSE, linewidth = 1.1, color = "grey15", lineend = "round") +
+  geom_point(data = filter(mat_df, member), color = "grey15", size = 3.8) +
+  geom_text(data = mat_labels, aes(x = x_lim[1] - 0.1, y = y, label = label), inherit.aes = FALSE, hjust = 1, size = 12 / .pt, fontface = "bold", color = "grey10", lineheight = 0.9) +
+  scale_x_continuous(limits = x_lim, oob = scales::oob_keep, expand = c(0, 0)) +
+  scale_y_continuous(limits = c(0.5, length(mat_rows) + 0.5), expand = c(0, 0)) +
+  coord_cartesian(clip = "off") +
+  theme_review +
+  theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), panel.background = element_rect(fill = "white", colour = NA), plot.margin = margin(t = 2))
+
+upset_parts <- if (has_break) list(p_high, p_low, p_mat) else list(p_low, p_mat)
+upset_heights <- if (has_break) c(0.18, 1, 0.55) else c(1, 0.55)
+
+## 6.4 Panel B: factors affecting SAC x inferred processes ----
+# A pair = a factor and a process coded in the same analysis (same row)
+process_plot_long <- dat %>% select(row_id, Process_inferred) %>% mutate(Process_inferred = as.character(Process_inferred)) %>% separate_rows(Process_inferred, sep = ",\\s*") %>% mutate(Process = str_trim(Process_inferred)) %>% filter(Process %in% process_levels) %>% distinct(row_id, Process)
+factor_plot_long <- dat %>% select(row_id, Factor_affecting_SAC) %>% mutate(Factor_affecting_SAC = as.character(Factor_affecting_SAC)) %>% separate_rows(Factor_affecting_SAC, sep = ",\\s*") %>% mutate(Factor = recode(str_trim(Factor_affecting_SAC), !!!factor_map)) %>% filter(Factor %in% factor_levels) %>% distinct(row_id, Factor)
+pair_long <- inner_join(process_plot_long, factor_plot_long, by = "row_id", relationship = "many-to-many")
+pair_counts <- pair_long %>% count(Process, Factor, name = "n") %>% complete(Process = process_levels, Factor = factor_levels, fill = list(n = 0)) %>% mutate(theme = factor(unname(factor_theme[Factor]), levels = theme_levels), Process = factor(Process, levels = rev(process_levels)), Factor = factor(Factor, levels = factor_levels))
+
+# Number of analyses with at least one factor-process pair (for the caption)
+n_distinct(pair_long$row_id)
+
+p_pair <- ggplot(pair_counts, aes(x = Factor, y = Process)) +
+  geom_tile(aes(fill = na_if(n, 0)), color = "white", linewidth = 0.8) +
+  geom_text(aes(label = ifelse(n > 0, n, ""), color = n > max(n) * 0.55), size = 3.3, fontface = "bold") +
+  scale_fill_gradient(low = "#F8F1EE", high = "#9E2F1F", na.value = grey_na) +
+  scale_color_manual(values = c("TRUE" = "white", "FALSE" = "grey15"), guide = "none") +
+  scale_y_discrete(labels = scales::label_wrap(26)) +
+  guides(fill = guide_colorbar(title = "Analyses reporting factor and process", title.position = "left", title.vjust = 0.8, direction = "horizontal", barwidth = unit(5, "cm"), barheight = unit(0.45, "cm"))) +
+  facet_grid(. ~ theme, scales = "free_x", space = "free_x") +
+  labs(title = "b. What affects SAC, and what is inferred from it?", x = "Factor affecting SAC", y = "Inferred process") +
+  theme_heat +
+  theme(plot.title.position = "plot", plot.title = element_text(size = 15, face = "bold", margin = margin(t = 34, b = 10)), axis.text.x = element_text(angle = 40, hjust = 1), axis.title.x = element_text(size = 12, face = "bold", color = "grey15", margin = margin(t = 6)), axis.title.y = element_text(size = 12, face = "bold", color = "grey15", margin = margin(r = 6)), panel.spacing.x = unit(0.8, "lines"), strip.text.x = element_text(size = 12, face = "bold", color = "grey15"), legend.position = "bottom", legend.title = element_text(size = 11, face = "bold", margin = margin(r = 8)))
+
+## 6.5 Combine and save ----
+p_fig4 <- wrap_plots(c(upset_parts, list(p_pair)), ncol = 1, heights = c(upset_heights, 1.15)) + plot_annotation(theme = theme(plot.margin = margin(t = 5, r = 5, b = 5, l = 22)))
+p_fig4
+
+ggsave(file.path(out_dir, "fig4_objectives_factors.png"), p_fig4, width = 14, height = 14, dpi = 300, bg = "white")
+
+
+
+## 6.6 Prepare factor-process permutation analysis ----
+
+factor_perm_long <- dat %>%
+  filter(!is.na(Factor_affecting_SAC), Factor_affecting_SAC != "", Factor_affecting_SAC != "Not reported") %>%
+  select(Analysis_ID, Factor_affecting_SAC) %>%
+  separate_rows(Factor_affecting_SAC, sep = ",\\s*") %>%
+  mutate(Factor_affecting_SAC = str_trim(Factor_affecting_SAC)) %>%
+  filter(Factor_affecting_SAC != "None tested or reported") %>%
+  distinct(Analysis_ID, Factor_affecting_SAC)
+
+process_perm_long <- dat %>%
+  filter(!is.na(Process_inferred), Process_inferred != "", Process_inferred != "Not reported") %>%
+  select(Analysis_ID, Process_inferred) %>%
+  separate_rows(Process_inferred, sep = ",\\s*") %>%
+  mutate(Process_inferred = str_trim(Process_inferred)) %>%
+  filter(!Process_inferred %in% c("Unclear", "Multiple processes")) %>%
+  distinct(Analysis_ID, Process_inferred)
+
+factor_perm_levels <- factor_perm_long %>% distinct(Factor_affecting_SAC) %>% arrange(Factor_affecting_SAC) %>% pull(Factor_affecting_SAC)
+process_perm_levels <- process_perm_long %>% distinct(Process_inferred) %>% arrange(Process_inferred) %>% pull(Process_inferred)
+eligible_ids <- intersect(unique(factor_perm_long$Analysis_ID), unique(process_perm_long$Analysis_ID))
+
+aim4_sample_size <- dat %>% filter(Analysis_ID %in% eligible_ids) %>% summarise(n_analyses = n_distinct(Analysis_ID), n_studies = n_distinct(Study_ID))
+factor_freq <- factor_perm_long %>% count(Factor_affecting_SAC, name = "n_analyses", sort = TRUE)
+process_freq <- process_perm_long %>% count(Process_inferred, name = "n_analyses", sort = TRUE)
+
+aim4_sample_size
+factor_freq
+process_freq
+
+## 6.7 Permutation function ----
+
+run_factor_process_perm <- function(n_perm = 9999, seed = 123) {
+  ids <- intersect(unique(factor_perm_long$Analysis_ID), unique(process_perm_long$Analysis_ID))
+  n_analysis <- length(ids)
+  message(n_analysis, " eligible analyses")
+
+  F <- matrix(0L, nrow = n_analysis, ncol = length(factor_perm_levels), dimnames = list(ids, factor_perm_levels))
+  factor_sub <- factor_perm_long %>% filter(Analysis_ID %in% ids, Factor_affecting_SAC %in% factor_perm_levels) %>% distinct(Analysis_ID, Factor_affecting_SAC)
+  F[cbind(match(factor_sub$Analysis_ID, ids), match(factor_sub$Factor_affecting_SAC, factor_perm_levels))] <- 1L
+
+  P <- matrix(0L, nrow = n_analysis, ncol = length(process_perm_levels), dimnames = list(ids, process_perm_levels))
+  process_sub <- process_perm_long %>% filter(Analysis_ID %in% ids, Process_inferred %in% process_perm_levels) %>% distinct(Analysis_ID, Process_inferred)
+  P[cbind(match(process_sub$Analysis_ID, ids), match(process_sub$Process_inferred, process_perm_levels))] <- 1L
+
+  stopifnot(nrow(F) == nrow(P), identical(rownames(F), rownames(P)), nrow(F) == n_analysis)
+  observed <- t(F) %*% P
+  expected <- outer(colSums(F), colSums(P)) / n_analysis
+  dimnames(expected) <- dimnames(observed)
+
+  perm_sum <- matrix(0, nrow(observed), ncol(observed), dimnames = dimnames(observed))
+  perm_sumsq <- matrix(0, nrow(observed), ncol(observed), dimnames = dimnames(observed))
+  extreme_count <- matrix(0, nrow(observed), ncol(observed), dimnames = dimnames(observed))
+  valid <- expected > 0
+  global_obs <- sum(((observed[valid] - expected[valid])^2) / expected[valid])
+  global_extreme <- 0L
+
+  set.seed(seed)
+  for (i in seq_len(n_perm)) {
+    P_perm <- P[sample.int(n_analysis, n_analysis, replace = FALSE), , drop = FALSE]
+    perm_mat <- t(F) %*% P_perm
+    perm_sum <- perm_sum + perm_mat
+    perm_sumsq <- perm_sumsq + perm_mat^2
+    extreme_count <- extreme_count + (abs(perm_mat - expected) >= abs(observed - expected))
+    global_perm <- sum(((perm_mat[valid] - expected[valid])^2) / expected[valid])
+    global_extreme <- global_extreme + as.integer(global_perm >= global_obs)
+  }
+
+  null_mean <- perm_sum / n_perm
+  null_var <- (perm_sumsq - n_perm * null_mean^2) / (n_perm - 1)
+  null_sd <- sqrt(pmax(null_var, 0))
+  SES <- (observed - null_mean) / null_sd
+  SES[null_sd == 0] <- NA_real_
+  p_mat <- (extreme_count + 1) / (n_perm + 1)
+
+  matrix_long <- function(x, value_name) {
+    as.data.frame(as.table(x)) %>% as_tibble() %>% rename(Factor_affecting_SAC = Var1, Process_inferred = Var2, !!value_name := Freq)
+  }
+
+  result <- matrix_long(observed, "observed") %>%
+    left_join(matrix_long(expected, "expected"), by = c("Factor_affecting_SAC", "Process_inferred")) %>%
+    left_join(matrix_long(null_mean, "null_mean"), by = c("Factor_affecting_SAC", "Process_inferred")) %>%
+    left_join(matrix_long(null_sd, "null_sd"), by = c("Factor_affecting_SAC", "Process_inferred")) %>%
+    left_join(matrix_long(SES, "SES"), by = c("Factor_affecting_SAC", "Process_inferred")) %>%
+    left_join(matrix_long(p_mat, "p_value"), by = c("Factor_affecting_SAC", "Process_inferred"))
+
+  factor_n <- tibble(Factor_affecting_SAC = factor_perm_levels, factor_n = as.numeric(colSums(F)))
+  process_n <- tibble(Process_inferred = process_perm_levels, process_n = as.numeric(colSums(P)))
+
+  result <- result %>%
+    left_join(factor_n, by = "Factor_affecting_SAC") %>%
+    left_join(process_n, by = "Process_inferred") %>%
+    mutate(p_adj = p.adjust(p_value, method = "BH"),
+           direction = case_when(SES > 0 ~ "More frequent than expected", SES < 0 ~ "Less frequent than expected", TRUE ~ "As expected"),
+           factor_support = case_when(factor_n >= 10 ~ "Good support (>=10 analyses)", factor_n >= 5 ~ "Sparse support (5-9 analyses)", TRUE ~ "Very sparse support (<5 analyses)")) %>%
+    arrange(p_adj, desc(abs(SES)))
+
+  list(n_analysis = n_analysis, factor_matrix = F, process_matrix = P, observed = observed, expected = expected,
+       global_statistic = global_obs, global_p = (global_extreme + 1) / (n_perm + 1), pairwise = result)
+}
+
+## 6.8 Run and inspect permutation analysis ----
+
+perm_all <- run_factor_process_perm(n_perm = 9999, seed = 123)
+global_results <- tibble(n_analyses = perm_all$n_analysis, global_statistic = perm_all$global_statistic, p_value = perm_all$global_p)
+pairwise_results <- perm_all$pairwise
+
+all_significant_links <- pairwise_results %>% filter(p_adj < 0.05) %>% select(Factor_affecting_SAC, Process_inferred, factor_n, process_n, observed, expected, SES, p_value, p_adj, factor_support, direction) %>% arrange(p_adj, desc(abs(SES)))
+interpretable_links <- pairwise_results %>% filter(factor_n >= 5, p_adj < 0.05) %>% select(Factor_affecting_SAC, Process_inferred, factor_n, process_n, observed, expected, SES, p_value, p_adj, factor_support, direction) %>% arrange(p_adj, desc(abs(SES)))
+primary_links <- pairwise_results %>% filter(factor_n >= 10, p_adj < 0.05) %>% select(Factor_affecting_SAC, Process_inferred, factor_n, process_n, observed, expected, SES, p_value, p_adj, direction) %>% arrange(p_adj, desc(abs(SES)))
+positive_links <- interpretable_links %>% filter(SES > 0)
+negative_links <- interpretable_links %>% filter(SES < 0)
+
+global_results
+print(all_significant_links, n = Inf, width = Inf)
+print(interpretable_links, n = Inf, width = Inf)
+print(primary_links, n = Inf, width = Inf)
+
+## 6.9 Export supplementary factor-process table ----
+
+table_Sx_compact <- pairwise_results %>%
+  mutate(Process_abbr = case_when(Process_inferred == "Biotic interactions" ~ "BI", Process_inferred == "Dispersal limitation" ~ "DL", Process_inferred == "Historical processes" ~ "HP", Process_inferred == "Mass effects" ~ "ME", Process_inferred == "Neutral or stochastic processes" ~ "NS", Process_inferred == "Species sorting or environmental filtering" ~ "SS/EF", TRUE ~ Process_inferred),
+         result = if_else(observed == 0 & expected == 0, NA_character_, paste0(observed, "/", sprintf("%.1f", expected), "; ", sprintf("%.2f", SES), "; ", sprintf("%.3f", p_adj)))) %>%
+  select(Factor_affecting_SAC, factor_n, Process_abbr, result) %>%
+  pivot_wider(names_from = Process_abbr, values_from = result) %>%
+  select(Factor_affecting_SAC, factor_n, BI, DL, HP, ME, NS, `SS/EF`) %>%
+  arrange(desc(factor_n), Factor_affecting_SAC) %>%
+  rename(`Factor affecting SAC` = Factor_affecting_SAC, `n` = factor_n)
+
+wb <- createWorkbook()
+addWorksheet(wb, "Table_Sx")
+writeData(wb, "Table_Sx", table_Sx_compact, withFilter = FALSE)
+header_style <- createStyle(textDecoration = "bold", halign = "center", valign = "center", wrapText = TRUE)
+centre_style <- createStyle(halign = "center", valign = "center")
+significant_style <- createStyle(textDecoration = "bold", halign = "center", valign = "center")
+addStyle(wb, "Table_Sx", header_style, rows = 1, cols = 1:ncol(table_Sx_compact), gridExpand = TRUE)
+freezePane(wb, "Table_Sx", firstRow = TRUE)
+setColWidths(wb, "Table_Sx", cols = 1, widths = 30)
+setColWidths(wb, "Table_Sx", cols = 2, widths = 7)
+setColWidths(wb, "Table_Sx", cols = 3:8, widths = 18)
+addStyle(wb, "Table_Sx", centre_style, rows = 2:(nrow(table_Sx_compact) + 1), cols = 2:8, gridExpand = TRUE)
+
+process_col_map <- c("Biotic interactions" = 3, "Dispersal limitation" = 4, "Historical processes" = 5, "Mass effects" = 6, "Neutral or stochastic processes" = 7, "Species sorting or environmental filtering" = 8)
+significant_cells <- pairwise_results %>% filter(p_adj < 0.05)
+for (i in seq_len(nrow(significant_cells))) {
+  excel_row <- match(significant_cells$Factor_affecting_SAC[i], table_Sx_compact$`Factor affecting SAC`) + 1
+  excel_col <- process_col_map[[significant_cells$Process_inferred[i]]]
+  addStyle(wb, "Table_Sx", significant_style, rows = excel_row, cols = excel_col, stack = TRUE)
+}
+
+saveWorkbook(wb, file.path(results_dir, "Table_Sx_factor_process_permutation_compact.xlsx"), overwrite = TRUE)
+
+
+# =============================================================================
+# ================================= AIM 5 =====================================
+# =============================================================================
+
+# 7 Figure 5 - Reported SAC ranges ---------------------------------------------
+
+## 7.1 Settings and data ----
+format_range <- function(km) sapply(km, function(v) if (v < 1) paste0(format(v * 1000, scientific = FALSE, drop0trailing = TRUE, trim = TRUE), " m") else paste0(format(v, big.mark = ",", scientific = FALSE, drop0trailing = TRUE, trim = TRUE), " km"))
+# Point shapes per freshwater realm (fillable, so the fill can show the spatial scale)
+realm_shapes <- c("Lotic" = 21, "Lentic" = 22, "Groundwater" = 24, "Multiple" = 23, "Other" = 25)
+
+range_df <- dat %>% filter(!is.na(SAC_range_value_m_num), SAC_range_value_m_num > 0) %>% mutate(range_km = SAC_range_value_m_num / 1000, bio_group = factor(unname(target_group[Target_group]), levels = group_sequence), Target_group = factor(Target_group, levels = rev(target_order)), Freshwater_realm = factor(ifelse(Freshwater_realm %in% names(realm_colors), Freshwater_realm, "Other"), levels = names(realm_colors)), Scale_class = factor(Scale_class, levels = scale_levels_all)) %>% droplevels()
+
+# Analyses and studies with a reported SAC range (for the caption)
+nrow(range_df)
+n_distinct(range_df$Study_ID)
+
+x_min <- 10^floor(log10(min(range_df$range_km)))
+x_max <- 10^ceiling(log10(max(range_df$range_km)))
+x_breaks <- 10^(log10(x_min):log10(x_max))
+x_breaks_bc <- x_breaks[seq(1, length(x_breaks), by = 2)]
+x_limits <- c(x_min / 10^1.6, x_max * 10^0.7)
+label_x <- x_max * 10^0.15
+
+group_n <- range_df %>% count(bio_group, Target_group, name = "n")
+icon_range <- group_n %>% mutate(uuid = unname(target_uuids[as.character(Target_group)]), h = icon_height(as.character(Target_group), base = 0.8, max_aspect = 1.6), x = x_min / 10^0.9) %>% filter(!is.na(uuid))
+realm_n <- range_df %>% count(Freshwater_realm, name = "n")
+scale_n <- range_df %>% count(Scale_class, name = "n")
+
+# y-axis labels of panels B and C in the colours of their categories (spatial-scale
+# colours slightly darkened for readability; ggplot2 may warn about vectorised colours)
+darken <- function(col, amount = 0.3) vapply(col, function(cl) colorRampPalette(c(cl, "black"))(101)[round(amount * 100) + 1], character(1))
+realm_label_cols <- unname(realm_colors[rev(levels(range_df$Freshwater_realm))])
+scale_label_cols <- unname(darken(scale_class_colors[rev(levels(range_df$Scale_class))]))
+label_bc <- function(cols) element_text(size = 14, face = "bold", color = cols, hjust = 1)
+
+## 7.2 Panel A: by target group ----
+p_range_group <- ggplot(range_df, aes(x = range_km, y = Target_group)) +
+  geom_boxplot(fill = "grey95", color = "grey45", outlier.shape = NA, width = 0.6, linewidth = 0.4) +
+  geom_point(aes(fill = Scale_class, shape = Freshwater_realm), position = position_jitter(width = 0, height = 0.18, seed = 1), size = 3, color = "grey25", stroke = 0.4, alpha = 0.95) +
+  phylopic_layers(icon_range, "x", "Target_group") +
+  geom_text(data = group_n, aes(x = label_x, y = Target_group, label = paste0("n = ", n)), hjust = 0, size = 3.2, color = "grey30") +
+  scale_x_log10(limits = x_limits, breaks = x_breaks, labels = format_range) +
+  scale_fill_manual(values = scale_class_colors, name = "Spatial scale", drop = TRUE) +
+  scale_shape_manual(values = realm_shapes, name = "Freshwater realm", drop = TRUE) +
+  guides(fill = guide_legend(order = 1, override.aes = list(shape = 21, size = 4, color = "grey25")), shape = guide_legend(order = 2, override.aes = list(fill = "grey70", size = 4, color = "grey25"))) +
+  facet_grid(bio_group ~ ., scales = "free_y", space = "free_y", switch = "y", labeller = labeller(bio_group = label_wrap_gen(13))) +
+  labs(title = "a. Reported SAC range by target group", x = "Reported SAC range (log scale)", y = NULL) +
+  theme_range +
+  theme(panel.spacing.y = unit(0.3, "lines"), strip.placement = "outside", strip.text.y.left = element_text(angle = 0, hjust = 1, size = 14, face = "bold", color = "grey15", lineheight = 0.9))
+
+## 7.3 Panel B: by freshwater realm ----
+# Boxes in realm colours, points in spatial-scale colours (one fill scale; the box
+# levels carry a "box_" prefix to keep them apart)
+fill_B <- c(setNames(realm_colors, paste0("box_", names(realm_colors))), scale_class_colors)
+p_range_realm <- ggplot(range_df, aes(x = range_km, y = fct_rev(Freshwater_realm))) +
+  geom_boxplot(aes(fill = paste0("box_", Freshwater_realm)), color = "grey35", outlier.shape = NA, width = 0.6, linewidth = 0.4, alpha = 0.35) +
+  geom_point(aes(fill = Scale_class, shape = Freshwater_realm), position = position_jitter(width = 0, height = 0.18, seed = 1), size = 3, color = "grey25", stroke = 0.4, alpha = 0.95) +
+  geom_text(data = realm_n, aes(x = label_x, y = Freshwater_realm, label = paste0("n = ", n)), hjust = 0, size = 3.2, color = "grey30") +
+  scale_x_log10(limits = x_limits, breaks = x_breaks_bc, labels = format_range) +
+  scale_fill_manual(values = fill_B, guide = "none") +
+  scale_shape_manual(values = realm_shapes, guide = "none") +
+  coord_cartesian(clip = "off") +
+  labs(title = "b. By freshwater realm", x = "Reported SAC range (log scale)", y = NULL) +
+  theme_range +
+  theme(axis.text.y = label_bc(realm_label_cols), plot.margin = margin(r = 30))
+
+## 7.4 Panel C: by spatial scale of the study ----
+# Boxes in spatial-scale colours, points in realm colours ("pt_" prefix)
+fill_C <- c(scale_class_colors, setNames(realm_colors, paste0("pt_", names(realm_colors))))
+p_range_scale <- ggplot(range_df, aes(x = range_km, y = fct_rev(Scale_class))) +
+  geom_boxplot(aes(fill = Scale_class), color = "grey35", outlier.shape = NA, width = 0.6, linewidth = 0.4, alpha = 0.5) +
+  geom_point(aes(fill = paste0("pt_", Freshwater_realm), shape = Freshwater_realm), position = position_jitter(width = 0, height = 0.18, seed = 1), size = 3, color = "grey25", stroke = 0.4, alpha = 0.95) +
+  geom_text(data = scale_n, aes(x = label_x, y = Scale_class, label = paste0("n = ", n)), hjust = 0, size = 3.2, color = "grey30") +
+  scale_x_log10(limits = x_limits, breaks = x_breaks_bc, labels = format_range) +
+  scale_fill_manual(values = fill_C, guide = "none") +
+  scale_shape_manual(values = realm_shapes, guide = "none") +
+  coord_cartesian(clip = "off") +
+  labs(title = "c. By spatial scale of the study", x = "Reported SAC range (log scale)", y = NULL) +
+  theme_range +
+  theme(axis.text.y = label_bc(scale_label_cols), plot.margin = margin(r = 30))
+
+## 7.5 Combine and save ----
+# A on top, B and C below; legends in the free space below A's group labels
+legend_fig5 <- wrap_elements(full = get_legend(p_range_group + theme(legend.position = "left", legend.box = "vertical", legend.box.just = "left")))
+layout_fig5 <- "
+AA
+BC
+"
+p_fig5_core <- (p_range_group + theme(legend.position = "none")) + free(p_range_realm, type = "label", side = "l") + p_range_scale + plot_layout(design = layout_fig5, widths = c(1, 1), heights = c(2.4, 1))
+p_fig5 <- wrap_elements(full = p_fig5_core) + inset_element(legend_fig5, left = 0.005, bottom = 0.05, right = 0.13, top = 0.31, align_to = "full")
+p_fig5
+
+ggsave(file.path(out_dir, "fig5_sac_range.png"), p_fig5, width = 14, height = 15, dpi = 300, bg = "white")
+
+
+## 7.6 SAC-range data checks ----
+
+dat %>%
+  filter(!is.na(SAC_range_value_m_num), SAC_range_value_m_num > 0) %>%
+  summarise(n_range = n(), n_extent = sum(!is.na(Study_extent_km_num)), n_scale_class = sum(!is.na(Scale_class) & Scale_class != "Not reported"))
+
+dat %>% filter(!is.na(SAC_range_value_m_num), SAC_range_value_m_num > 0) %>% count(Target_group, sort = TRUE)
+dat %>% filter(!is.na(SAC_range_value_m_num), SAC_range_value_m_num > 0) %>% count(Freshwater_realm, sort = TRUE)
+
+## 7.7 Prepare model dataset ----
+
+range_model_data <- dat %>%
+  filter(!is.na(SAC_range_value_m_num), SAC_range_value_m_num > 0) %>%
+  mutate(Target_group_plot = case_when(Target_group %in% c("Zooplankton", "Phytoplankton") ~ "Plankton", TRUE ~ as.character(Target_group)),
+         log_range = log10(SAC_range_value_m_num),
+         Scale_class = factor(Scale_class, levels = c("Local", "Landscape", "Regional", "Continental")),
+         Target_group_plot = factor(Target_group_plot, levels = c("Macroinvertebrates", "Fish", "Plankton", "Diatoms", "Amphibians", "Macrophytes")),
+         Freshwater_realm = factor(Freshwater_realm, levels = c("Lotic", "Lentic"))) %>%
+  filter(!is.na(Scale_class), !is.na(Target_group_plot), !is.na(Freshwater_realm)) %>%
+  droplevels()
+
+range_model_data %>% summarise(n_analyses = n(), n_studies = n_distinct(Study_ID))
+range_model_data %>% count(Target_group_plot, sort = TRUE)
+range_model_data %>% count(Freshwater_realm)
+range_model_data %>% count(Scale_class)
+range_model_data %>% count(Target_group_plot, Freshwater_realm) %>% pivot_wider(names_from = Freshwater_realm, values_from = n, values_fill = 0)
+range_model_data %>% count(Target_group_plot, Scale_class) %>% pivot_wider(names_from = Scale_class, values_from = n, values_fill = 0)
+range_model_data %>% count(Freshwater_realm, Scale_class) %>% pivot_wider(names_from = Scale_class, values_from = n, values_fill = 0)
+range_model_data %>% count(Study_ID, name = "n_analyses") %>% count(n_analyses, name = "n_studies") %>% arrange(n_analyses)
+
+## 7.8 Mixed model of reported SAC range ----
+
+mod_range <- lmer(log_range ~ Scale_class + Target_group_plot + Freshwater_realm + (1 | Study_ID), data = range_model_data, REML = TRUE)
+summary(mod_range)
+isSingular(mod_range, tol = 1e-4)
+VarCorr(mod_range)
+car::Anova(mod_range, type = 2)
+
+## 7.9 Model diagnostics ----
+
+par(mfrow = c(1, 2))
+plot(fitted(mod_range), resid(mod_range), xlab = "Fitted values", ylab = "Residuals")
+abline(h = 0, lty = 2)
+qqnorm(resid(mod_range))
+qqline(resid(mod_range))
+par(mfrow = c(1, 1))
+hist(resid(mod_range), breaks = 15, main = "Residuals", xlab = "Residual")
+
+
+# =============================================================================
+# =========================== SUPPLEMENTARY ===================================
+# =============================================================================
+# Figure S1 is the screening flowchart and is prepared separately.
+
+
+# 8 Figure S2 - Methods and spatial metrics used to quantify SAC ----------------
+
+## 8.1 Method and spatial-metric classes ----
+method_group <- function(x) {
+  l <- tolower(x)
+  case_when(str_detect(l, "mrm|multiple regression on distance") ~ "MRM",
+            str_detect(l, "mantel") ~ "Mantel-type tests",
+            str_detect(l, "decay") ~ "Distance decay",
+            str_detect(l, "moran|geary|correlogram|join-count|lisa") ~ "Correlograms & autocorrelation indices",
+            str_detect(l, "variogram|krig") ~ "Variograms & kriging",
+            str_detect(l, "mem\\b|pcnm|aem\\b|eigenvector|spatial filter") ~ "Spatial eigenvectors",
+            str_detect(l, "jsdm|hmsc|joint species") ~ "Joint species distribution models",
+            str_detect(l, "car\\b|sar\\b|autoregress|gls|gamm|spatial random|inla|spde|gaussian process|spatial regression") ~ "Spatial regression models",
+            TRUE ~ "Other")
+}
+method_levels <- c("Mantel-type tests", "Distance decay", "MRM", "Correlograms & autocorrelation indices", "Variograms & kriging", "Spatial eigenvectors", "Spatial regression models", "Joint species distribution models", "Other")
+method_labels <- c("Correlograms & autocorrelation indices" = "Correlograms &\nautocorrelation indices", "Joint species distribution models" = "Joint species\ndistribution models", "Spatial regression models" = "Spatial regression\nmodels")
+
+metric_group <- function(x) {
+  l <- tolower(str_trim(x))
+  case_when(str_detect(l, "euclidean|geographic") ~ "Euclidean/geographic",
+            str_detect(l, "^network") ~ "Network",
+            str_detect(l, "resistance|cost") ~ "Resistance/cost",
+            str_detect(l, "adjacency") ~ "Adjacency",
+            str_detect(l, "^unclear$") ~ "Unclear",
+            TRUE ~ "Other")
+}
+metric_levels <- c("Euclidean/geographic", "Network", "Resistance/cost", "Adjacency", "Other", "Unclear")
+metric_labels <- c("Euclidean/geographic" = "Euclidean /\ngeographic", "Resistance/cost" = "Resistance /\ncost")
+
+# Checks of raw -> grouped categories
+dat %>% select(SAC_method) %>% separate_rows(SAC_method, sep = ",\\s*") %>% mutate(SAC_method = str_trim(SAC_method)) %>% filter(SAC_method != "Not reported") %>% count(SAC_method) %>% mutate(class = method_group(SAC_method)) %>% arrange(class, desc(n)) %>% print(n = Inf)
+dat %>% select(Spatial_metric) %>% separate_rows(Spatial_metric, sep = ",\\s*") %>% mutate(Spatial_metric = str_trim(Spatial_metric)) %>% filter(Spatial_metric != "Not reported") %>% count(Spatial_metric) %>% mutate(metric = metric_group(Spatial_metric)) %>% arrange(metric, desc(n)) %>% print(n = Inf)
+
+meth_sets <- dat %>% select(row_id, SAC_method) %>% separate_rows(SAC_method, sep = ",\\s*") %>% mutate(SAC_method = str_trim(SAC_method)) %>% filter(!is.na(SAC_method), SAC_method != "", SAC_method != "Not reported") %>% mutate(method = method_group(SAC_method)) %>% distinct(row_id, method) %>% group_by(row_id) %>% summarise(sets = list(sort(unique(method))), .groups = "drop")
+metric_long <- dat %>% select(row_id, Spatial_metric) %>% separate_rows(Spatial_metric, sep = ",\\s*") %>% mutate(Spatial_metric = str_trim(Spatial_metric), Spatial_metric = if_else(is.na(Spatial_metric) | Spatial_metric == "" | Spatial_metric == "Not reported", "Unclear", Spatial_metric), metric = metric_group(Spatial_metric)) %>% distinct(row_id, metric)
+
+## 8.2 Plot function ----
+build_method_metric_upset <- function(sets_tbl, metric_tbl, set_order, metric_order, title, max_combos = 15, label_map = NULL, metric_label_map = NULL, heat_low = "#F8F1EE", heat_high = "#9E2F1F", bar_fill = "#4A4A4A", show_heat_labels = TRUE) {
+  cn <- sets_tbl %>% mutate(key = combo_key(sets)) %>% count(key, name = "n") %>% arrange(desc(n)) %>% slice_head(n = max_combos) %>% mutate(x = row_number())
+  k <- nrow(cn); xl <- c(0.4, k + 0.6)
+  ylow <- c(0, ceiling(cn$n[min(2, k)] * 1.25 / 10) * 10)
+  brk <- k >= 2 && cn$n[1] > ylow[2] * 1.5
+  if (!brk) ylow <- c(0, ceiling(cn$n[1] * 1.1 / 10) * 10)
+  yhigh <- c(floor(cn$n[1] * 0.93 / 10) * 10, ceiling(cn$n[1] * 1.05 / 10) * 10)
+
+  bar_part <- function(yl, breaks) {
+    d <- cn %>% mutate(a = pmin(pmax(0, yl[1]), yl[2]), b = pmin(pmax(n, yl[1]), yl[2])) %>% filter(b > a)
+    ggplot(d) + geom_rect(aes(xmin = x - 0.35, xmax = x + 0.35, ymin = a, ymax = b), fill = bar_fill, color = "white", linewidth = 0.3) + axis_layers(yl, breaks, xl[1]) + scale_x_continuous(limits = xl, oob = scales::oob_keep, expand = c(0, 0)) + scale_y_continuous(limits = yl, breaks = breaks, expand = c(0, 0)) + coord_cartesian(clip = "off") + theme_review + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), axis.line = element_blank(), panel.grid.major.x = element_blank(), panel.grid.minor = element_blank())
+  }
+  slash <- function(y, yl) annotate("segment", x = xl[1] - 0.18, xend = xl[1] + 0.18, y = y - 0.06 * diff(yl), yend = y + 0.06 * diff(yl), color = "grey25", linewidth = 0.7)
+  ttl <- element_text(size = 15, face = "bold", margin = margin(b = 10))
+  lb <- pretty(ylow, n = 5); lb <- lb[lb >= ylow[1] & lb <= ylow[2]]
+  low <- bar_part(ylow, lb) + geom_text(data = filter(cn, n <= ylow[2]), aes(x = x, y = n, label = n), inherit.aes = FALSE, vjust = -0.4, size = 3.4, fontface = "bold", color = "grey20") + annotate("text", x = xl[1] - 0.75, y = mean(ylow), label = "Number of analyses", angle = 90, size = 12 / .pt, fontface = "bold", color = "grey15") + theme(plot.margin = margin(t = 2, b = 0))
+  if (brk) {
+    hb <- pretty(yhigh, n = 2); hb <- hb[hb > yhigh[1] & hb < yhigh[2]]
+    low <- low + slash(ylow[2], ylow)
+    high <- bar_part(yhigh, hb) + geom_text(data = filter(cn, n > ylow[2]), aes(x = x, y = n, label = n), inherit.aes = FALSE, vjust = -0.4, size = 3.4, fontface = "bold", color = "grey20") + slash(yhigh[1], yhigh) + labs(title = title) + theme(plot.margin = margin(b = 2), panel.grid.major.y = element_blank(), plot.title.position = "plot", plot.title = ttl)
+  } else low <- low + labs(title = title) + theme(plot.title.position = "plot", plot.title = ttl)
+
+  row_combo <- sets_tbl %>% mutate(key = combo_key(sets)) %>% filter(key %in% cn$key) %>% left_join(select(cn, key, x, combo_n = n), by = "key")
+  heat_counts <- row_combo %>% select(row_id, key, x, combo_n) %>% left_join(metric_tbl, by = "row_id") %>% distinct(row_id, key, x, combo_n, metric) %>% count(key, x, combo_n, metric, name = "metric_n") %>% mutate(pct = 100 * metric_n / combo_n)
+  heat_df <- expand_grid(x = 1:k, metric = metric_order) %>% left_join(select(cn, x, key, combo_n = n), by = "x") %>% left_join(select(heat_counts, key, metric, metric_n, pct), by = c("key", "metric")) %>% mutate(metric_n = replace_na(metric_n, 0L), pct = replace_na(pct, 0), y = match(metric, rev(metric_order)))
+  metric_rows <- rev(metric_order)
+  metric_row_labels <- if (is.null(metric_label_map)) metric_rows else ifelse(metric_rows %in% names(metric_label_map), metric_label_map[metric_rows], metric_rows)
+  heat <- ggplot(heat_df, aes(x = x, y = y, fill = pct)) + geom_tile(color = "white", linewidth = 0.7, width = 0.88, height = 0.88) + {if (show_heat_labels) geom_text(aes(label = ifelse(metric_n == 0, "", paste0(round(pct), "%"))), size = 2.7, color = "grey15", fontface = "bold")} + geom_text(data = tibble(y = seq_along(metric_rows), label = metric_row_labels), aes(x = xl[1] - 0.1, y = y, label = label), inherit.aes = FALSE, hjust = 1, size = 11 / .pt, fontface = "bold", color = "grey10", lineheight = 0.9) + scale_fill_gradient(low = heat_low, high = heat_high, limits = c(0, 100)) + scale_x_continuous(limits = xl, oob = scales::oob_keep, expand = c(0, 0)) + scale_y_continuous(limits = c(0.5, length(metric_rows) + 0.5), expand = c(0, 0)) + coord_cartesian(clip = "off") + theme_review + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.margin = margin(t = 5, b = 5), legend.position = "none")
+
+  shown_methods <- unique(unlist(strsplit(cn$key, " + ", fixed = TRUE)))
+  rows <- rev(set_order[set_order %in% shown_methods])
+  md <- expand_grid(x = 1:k, set = rows) %>% left_join(select(cn, x, key), by = "x") %>% mutate(member = map2_lgl(set, key, ~ .x %in% strsplit(.y, " + ", fixed = TRUE)[[1]]), y = match(set, rows))
+  ml <- md %>% filter(member) %>% group_by(x) %>% summarise(ymin = min(y), ymax = max(y), .groups = "drop") %>% filter(ymin < ymax)
+  row_labels <- if (is.null(label_map)) rows else ifelse(rows %in% names(label_map), label_map[rows], rows)
+  mat <- ggplot(md, aes(x = x, y = y)) + geom_point(data = filter(md, !member), color = "grey88", size = 3.8) + geom_segment(data = ml, aes(x = x, xend = x, y = ymin, yend = ymax), inherit.aes = FALSE, linewidth = 1.1, color = "grey15", lineend = "round") + geom_point(data = filter(md, member), color = "grey15", size = 3.8) + geom_text(data = tibble(y = seq_along(rows), label = row_labels), aes(x = xl[1] - 0.1, y = y, label = label), inherit.aes = FALSE, hjust = 1, size = 12 / .pt, fontface = "bold", color = "grey10", lineheight = 0.9) + scale_x_continuous(limits = xl, oob = scales::oob_keep, expand = c(0, 0)) + scale_y_continuous(limits = c(0.5, length(rows) + 0.5), expand = c(0, 0)) + coord_cartesian(clip = "off") + theme_review + theme(axis.text = element_blank(), axis.title = element_blank(), axis.ticks = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank(), plot.margin = margin(t = 2))
+
+  parts <- if (brk) list(high, low, heat, mat) else list(low, heat, mat)
+  heights <- if (brk) c(0.18, 1, 0.12 * length(metric_rows), 0.11 * length(rows)) else c(1, 0.12 * length(metric_rows), 0.11 * length(rows))
+  list(parts = parts, heights = heights, combos_shown = k, combos_total = n_distinct(combo_key(sets_tbl$sets)), analyses_shown = sum(cn$n), analyses_total = nrow(sets_tbl), methods_shown = rev(rows))
+}
+
+## 8.3 Plot and save ----
+upset_methods <- build_method_metric_upset(meth_sets, metric_long, method_levels, metric_levels, "Which methods were used to quantify SAC?", max_combos = 15, label_map = method_labels, metric_label_map = metric_labels, heat_low = "#F8F1EE", heat_high = "#9E2F1F", bar_fill = "#4A4A4A", show_heat_labels = TRUE)
+upset_methods[c("combos_shown", "combos_total", "analyses_shown", "analyses_total", "methods_shown")]
+
+p_figS2_core <- wrap_plots(upset_methods$parts, ncol = 1, heights = upset_methods$heights) + plot_annotation(theme = theme(plot.margin = margin(l = 155, t = 5, r = 5, b = 5)))
+p_figS2 <- wrap_elements(full = p_figS2_core)
+p_figS2
+
+ggsave(file.path(out_dir, "figS2_sac_methods.png"), p_figS2, width = 13, height = 11, dpi = 300, bg = "white")
+
+
+
+# 9 Image credits ---------------------------------------------------------------
+# PhyloPic credits for the silhouettes shown (target groups present in the data)
+
+get_attribution(uuid = unname(target_uuids[intersect(names(target_uuids), unique(dat$Target_group))]), text = TRUE)
