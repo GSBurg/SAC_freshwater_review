@@ -17,7 +17,6 @@ citation:                               # CUSTOMIZE: adds a citation + BibTeX bl
   version: "0.1 (pilot)"
   publisher: Zenodo
   doi: 10.5281/zenodo.0000000
-  url: https://kylemorrison99.github.io/spatial_autocorrelation/datapage.html
 google-scholar: true
 language:
   title-block-published: "Last updated"
